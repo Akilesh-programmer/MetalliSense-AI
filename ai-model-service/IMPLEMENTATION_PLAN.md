@@ -11,17 +11,20 @@ We've implemented a properly structured ML-powered service for metal composition
 ## Key Components
 
 ### 1. MongoDB Integration
+
 - Enhanced `MongoDBClient` to connect to your existing "MetalliSense" database
 - Added function to retrieve data from `metal_grade_specs` collection
 - Updated `MetalKnowledgeBase` to load specifications from MongoDB first, with fallback to hardcoded data
 
 ### 2. Data Generation Pipeline
+
 - Modified `generate_datasets.py` to create synthetic datasets:
   - **Composition Dataset**: For grade classification and composition prediction
   - **Recommendation Dataset**: For alloy addition recommendations
 - Stores datasets in MongoDB collections for persistence
 
 ### 3. Model Training Pipeline
+
 - Created `train_models.py` to train four ML models:
   - **Grade Classifier**: Predicts metal grade from composition
   - **Composition Predictor**: Predicts ideal composition
@@ -30,6 +33,7 @@ We've implemented a properly structured ML-powered service for metal composition
 - Saves trained models to disk in the `models/trained` directory
 
 ### 4. FastAPI Service
+
 - Updated to load pre-trained models instead of retraining on every startup
 - Proper error handling if models aren't available
 - Same API endpoints but with more efficient implementation
@@ -56,16 +60,20 @@ ai-model-service/
 │   └── mongo_client.py     # MongoDB client for MetalliSense DB
 │
 ├── init_ml_pipeline.py     # ML pipeline initialization
-└── start_service.py        # Service startup script
+├── start_service.py        # Service startup script
+└── run_server.py           # Server runner
 ```
 
 ## Setup Instructions
 
 1. **Initialize ML Pipeline**:
+
    ```
    python init_ml_pipeline.py
    ```
+
    This will:
+
    - Generate synthetic datasets based on your metal grade specifications
    - Store these datasets in MongoDB
    - Train ML models using these datasets

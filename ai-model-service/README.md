@@ -53,8 +53,7 @@ ai-model-service/
 ├── requirements.txt        # Python dependencies
 ├── init_ml_pipeline.py     # ML pipeline initialization
 ├── start_service.py        # Service startup script
-├── run_server.py           # Server runner
-└── test_service.py         # Service tests
+└── run_server.py           # Server runner
 ```
 
 ## Setup and Installation
@@ -67,18 +66,21 @@ ai-model-service/
 ### Installation
 
 1. Clone the repository:
+
    ```
    git clone https://github.com/Akilesh-programmer/MetalliSense-AI.git
    cd MetalliSense-AI/ai-model-service
    ```
 
 2. Create and activate a virtual environment:
+
    ```
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
 3. Install dependencies:
+
    ```
    pip install -r requirements.txt
    ```
@@ -93,6 +95,7 @@ ai-model-service/
 ### First-time Setup
 
 1. Initialize the ML pipeline (generates datasets and trains models):
+
    ```
    python init_ml_pipeline.py
    ```
@@ -146,6 +149,7 @@ The knowledge base integrates with MongoDB's `metal_grade_specs` collection. Add
 ## Testing
 
 Run the service tests:
+
 ```
 python test_service.py
 ```

@@ -49,16 +49,20 @@ ai-model-service/venv/
 # pipenv
 Pipfile.lock
 
-# Large ML model files (keep the structure)
-# But allow tracking small model files
+# Temporary and refactored files
+*_refactored.*
+update_git_tracking.*
+cleanup.*
+ai-model-service/cleanup.*
+ai-model-service/demo.py
+ai-model-service/test_service.py
+*_updated.*
+
+# Machine Learning model files
 *.joblib
 *.h5
+*.model
 models/trained/*.pkl
-# Keep train_models.py and model definitions
-!models/train_models.py
-!models/ml_models.py
-!models/knowledge_base.py
-!models/data_generator.py
 
 # OS
 .DS_Store
