@@ -44,122 +44,22 @@ def create_models_directory():
         logger.info(f"Created directory for trained models: {MODELS_DIR}")
 
 def load_datasets_from_mongodb():
-    """Load datasets from MongoDB"""
-    
-    # Initialize MongoDB client
+    """Load datasets from MongoDB with optimized structure"""
     mongo_client = MongoDBClient()
     if not mongo_client.connect():
         logger.error("Failed to connect to MongoDB. Exiting.")
         return None, None
     
     try:
-        # Load alloy recommendations dataset (this is our main training data)
-        logger.info("Loading alloy recommendations dataset from MongoDB...")
-        
-        # Use direct collection access instead of find_all to ensure we get all fields
-        collection = mongo_client.db["alloy_recommendations"]
-        recommendation_docs = list(collection.find())
-        
+        recommendation_docs = _load_recommendations_from_db(mongo_client)
         if not recommendation_docs:
-            logger.error("Failed to load alloy recommendations dataset from MongoDB")
             return None, None
         
-        # Convert to DataFrame
-        recommendation_df = pd.DataFrame(recommendation_docs)
-        logger.info(f"Loaded alloy recommendations dataset: {len(recommendation_df)} records")
-        
-        # Create composition dataset from recommendations for training composition models
-        logger.info("Creating composition dataset from recommendations...")
-        composition_data = []
-        
-        # Process raw documents instead of DataFrame rows to preserve nested structures
-        for i, rec in enumerate(recommendation_docs):
-            # Extract current composition (using correct field name from MongoDB)
-            initial_comp = rec.get('initial_composition', {})
-            target_comp_values = rec.get('target_composition_values', {})
-            
-            # Debug first few records
-            if i < 2:
-                logger.info(f"Record {i}: initial_comp type={type(initial_comp)}, keys={list(initial_comp.keys())[:3]}")
-                logger.info(f"Record {i}: target_comp type={type(target_comp_values)}, keys={list(target_comp_values.keys())[:3]}")
-            
-            # Skip if data is missing
-            if not isinstance(initial_comp, dict) or not isinstance(target_comp_values, dict):
-                if i < 5:
-                    logger.warning(f"Skipping record {i}: invalid data types")
-                continue
-                
-            if not initial_comp or not target_comp_values:
-                if i < 5:
-                    logger.warning(f"Skipping record {i}: empty compositions")
-                continue
-            
-            # Create training record
-            comp_record = {
-                'grade': rec.get('metal_grade'),
-                'confidence': rec.get('confidence_score', 0.0)
-            }
-            
-            # Add current composition features
-            for element, value in initial_comp.items():
-                comp_record[f'current_{element}'] = value
-            
-            # Add target composition features
-            for element, value in target_comp_values.items():
-                comp_record[f'target_{element}'] = value
-            
-            composition_data.append(comp_record)
-        
-        composition_df = pd.DataFrame(composition_data)
-        logger.info(f"Created composition dataset: {len(composition_df)} records")
-        
-        # Create alloy recommendation dataset for training recommendation models
-        logger.info("Creating alloy recommendation dataset...")
-        recommendation_data = []
-        
-        # Process raw documents instead of DataFrame rows to preserve nested structures
-        for i, rec in enumerate(recommendation_docs):
-            # Extract data
-            initial_comp = rec.get('initial_composition', {})
-            recommended_alloys = rec.get('recommended_alloys', {})
-            
-            # Debug first few records
-            if i < 2:
-                logger.info(f"Record {i}: recommended_alloys type={type(recommended_alloys)}, items={dict(list(recommended_alloys.items())[:2])}")
-            
-            # Skip if data is missing
-            if not isinstance(initial_comp, dict) or not isinstance(recommended_alloys, dict):
-                if i < 5:
-                    logger.warning(f"Skipping record {i}: invalid data types")
-                continue
-                
-            if not initial_comp or not recommended_alloys:
-                if i < 5:
-                    logger.warning(f"Skipping record {i}: empty compositions or alloys")
-                continue
-                
-            # Create records for each alloy recommendation
-            for alloy, amount in recommended_alloys.items():
-                rec_record = {
-                    'grade': rec.get('metal_grade'),
-                    'alloy': alloy,
-                    'amount_kg': amount,
-                    'confidence': rec.get('confidence_score', 0.0),
-                    'cost': rec.get('cost_per_100kg', 0)
-                }
-                
-                # Add current composition features
-                for element, value in initial_comp.items():
-                    rec_record[f'current_{element}'] = value
-                
-                recommendation_data.append(rec_record)
-        
-        recommendation_training_df = pd.DataFrame(recommendation_data)
-        logger.info(f"Created alloy recommendation dataset: {len(recommendation_training_df)} records")
+        composition_df = _create_composition_dataset(recommendation_docs)
+        recommendation_df = _create_recommendation_dataset(recommendation_docs)
         
         logger.info("Successfully prepared datasets for training")
-        
-        return composition_df, recommendation_training_df
+        return composition_df, recommendation_df
         
     except Exception as e:
         logger.error(f"Error loading datasets from MongoDB: {str(e)}")
@@ -167,8 +67,140 @@ def load_datasets_from_mongodb():
         logger.error(traceback.format_exc())
         return None, None
     finally:
-        # Close MongoDB connection
         mongo_client.close()
+
+def _load_recommendations_from_db(mongo_client):
+    """Load recommendation documents from MongoDB"""
+    logger.info("Loading alloy recommendations dataset from MongoDB...")
+    
+    collection = mongo_client.db["alloy_recommendations"]
+    recommendation_docs = list(collection.find())
+    
+    if not recommendation_docs:
+        logger.error("Failed to load alloy recommendations dataset from MongoDB")
+        return None
+    
+    logger.info(f"Loaded alloy recommendations dataset: {len(recommendation_docs)} records")
+    return recommendation_docs
+
+def _create_composition_dataset(recommendation_docs):
+    """Create composition dataset from recommendations for training composition models"""
+    logger.info("Creating composition dataset from recommendations...")
+    composition_data = []
+    
+    for i, rec in enumerate(recommendation_docs):
+        composition_record = _process_composition_record(rec, i)
+        if composition_record:
+            composition_data.append(composition_record)
+    
+    composition_df = pd.DataFrame(composition_data)
+    logger.info(f"Created composition dataset: {len(composition_df)} records")
+    return composition_df
+
+def _create_recommendation_dataset(recommendation_docs):
+    """Create alloy recommendation dataset for training recommendation models"""
+    logger.info("Creating alloy recommendation dataset...")
+    recommendation_data = []
+    
+    for i, rec in enumerate(recommendation_docs):
+        rec_records = _process_recommendation_record(rec, i)
+        recommendation_data.extend(rec_records)
+    
+    recommendation_df = pd.DataFrame(recommendation_data)
+    logger.info(f"Created alloy recommendation dataset: {len(recommendation_df)} records")
+    return recommendation_df
+
+def _process_composition_record(rec, index):
+    """Process a single recommendation record for composition training"""
+    initial_comp = rec.get('initial_composition', {})
+    target_comp_values = rec.get('target_composition_values', {})
+    
+    # Debug first few records
+    if index < 2:
+        logger.info(f"Record {index}: initial_comp type={type(initial_comp)}, keys={list(initial_comp.keys())[:3]}")
+        logger.info(f"Record {index}: target_comp type={type(target_comp_values)}, keys={list(target_comp_values.keys())[:3]}")
+    
+    # Validate data
+    if not _validate_composition_data(initial_comp, target_comp_values, index):
+        return None
+    
+    # Create training record
+    comp_record = {
+        'grade': rec.get('metal_grade'),
+        'confidence': rec.get('confidence_score', 0.0)
+    }
+    
+    # Add composition features
+    _add_composition_features(comp_record, initial_comp, 'current')
+    _add_composition_features(comp_record, target_comp_values, 'target')
+    
+    return comp_record
+
+def _process_recommendation_record(rec, index):
+    """Process a single recommendation record for alloy training"""
+    initial_comp = rec.get('initial_composition', {})
+    recommended_alloys = rec.get('recommended_alloys', {})
+    
+    # Debug first few records
+    if index < 2:
+        logger.info(f"Record {index}: recommended_alloys type={type(recommended_alloys)}, items={dict(list(recommended_alloys.items())[:2])}")
+    
+    # Validate data
+    if not _validate_recommendation_data(initial_comp, recommended_alloys, index):
+        return []
+    
+    # Create records for each alloy recommendation
+    rec_records = []
+    for alloy, amount in recommended_alloys.items():
+        rec_record = {
+            'grade': rec.get('metal_grade'),
+            'alloy': alloy,
+            'amount_kg': amount,
+            'confidence': rec.get('confidence_score', 0.0),
+            'cost': rec.get('cost_per_100kg', 0)
+        }
+        
+        _add_composition_features(rec_record, initial_comp, 'current')
+        rec_records.append(rec_record)
+    
+    return rec_records
+
+def _validate_composition_data(initial_comp, target_comp_values, index):
+    """Validate composition data for training"""
+    if not isinstance(initial_comp, dict) or not isinstance(target_comp_values, dict):
+        if index < 5:
+            logger.warning(f"Skipping record {index}: invalid data types")
+        return False
+        
+    if not initial_comp or not target_comp_values:
+        if index < 5:
+            logger.warning(f"Skipping record {index}: empty compositions")
+        return False
+    
+    return True
+
+def _validate_recommendation_data(initial_comp, recommended_alloys, index):
+    """Validate recommendation data for training"""
+    if not isinstance(initial_comp, dict) or not isinstance(recommended_alloys, dict):
+        if index < 5:
+            logger.warning(f"Skipping record {index}: invalid data types")
+        return False
+        
+    if not initial_comp or not recommended_alloys:
+        if index < 5:
+            logger.warning(f"Skipping record {index}: empty compositions or alloys")
+        return False
+    
+    return True
+
+def _add_composition_features(record, composition, prefix):
+    """Add composition features to a record with proper NaN handling"""
+    for element, value in composition.items():
+        # Handle NaN and None values
+        if value is None or pd.isna(value):
+            record[f'{prefix}_{element}'] = 0.0
+        else:
+            record[f'{prefix}_{element}'] = float(value)
 
 def save_model(model, filename):
     """Save a trained model to disk"""
