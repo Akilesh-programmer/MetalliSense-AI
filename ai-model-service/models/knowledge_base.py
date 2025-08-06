@@ -265,6 +265,51 @@ class MetalKnowledgeBase:
             logger.warning(f"Grade {grade} not found in knowledge base")
             return {}
     
+    def get_supported_grades(self) -> List[str]:
+        """Get list of supported metal grades"""
+        return list(self.grades.keys())
+    
+    def get_grade_specifications(self, grade: str) -> Dict[str, Any]:
+        """Get specifications for a specific grade"""
+        if grade in self.grades:
+            return self.grades[grade]
+        else:
+            # Try to get from MongoDB directly using the grade name
+            try:
+                if self.mongo_client.connect():
+                    specs = self.mongo_client.find_all("metal_grade_specs", query={"metal_grade": grade})
+                    if specs and len(specs) > 0:
+                        spec = specs[0]
+                        
+                        # Convert to the application format
+                        grade_data = {
+                            "description": f"{grade} Iron",
+                            "composition_ranges": {},
+                            "ideal_composition": {}
+                        }
+                        
+                        # Process each element's composition range
+                        for element, range_values in spec.get("composition_range", {}).items():
+                            if isinstance(range_values, list) and len(range_values) >= 2:
+                                min_val = range_values[0]
+                                max_val = range_values[1]
+                                target_val = (min_val + max_val) / 2  # Use middle of range as target
+                                
+                                grade_data["composition_ranges"][element] = {
+                                    "min": min_val,
+                                    "max": max_val,
+                                    "target": target_val
+                                }
+                                
+                                grade_data["ideal_composition"][element] = target_val
+                        
+                        return grade_data
+            except Exception as e:
+                logger.error(f"Error fetching grade {grade} from MongoDB: {str(e)}")
+                
+            logger.warning(f"Grade {grade} not found in knowledge base")
+            return {}
+    
     def get_grade_composition_ranges(self, grade: str) -> Dict[str, Dict[str, float]]:
         """Get composition ranges for a specific grade"""
         if grade in self.grades:

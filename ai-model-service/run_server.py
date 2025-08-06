@@ -23,16 +23,16 @@ try:
     
     print("✅ AI models loaded successfully!")
     print("📡 Starting FastAPI server...")
-    print("🌐 Service will be available at: http://localhost:8000")
-    print("📖 Interactive API docs at: http://localhost:8000/docs")
-    print("🔧 Health check endpoint: http://localhost:8000/health")
+    print("🌐 Service will be available at: http://localhost:8080")
+    print("📖 Interactive API docs at: http://localhost:8080/docs")
+    print("🔧 Health check endpoint: http://localhost:8080/health")
     print("-" * 60)
     
     # Start the server
     uvicorn.run(
         app, 
         host="0.0.0.0", 
-        port=8000, 
+        port=8080, 
         reload=False,
         log_level="info"
     )

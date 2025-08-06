@@ -20,7 +20,7 @@ import logging
 from datetime import datetime
 
 # Import refactored ML models
-from models.ml_models_refactored import MetalCompositionAnalyzer
+from models.ml_models import MetalCompositionAnalyzer
 from models.knowledge_base import MetalKnowledgeBase
 
 # Setup logging

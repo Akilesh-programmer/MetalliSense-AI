@@ -14,13 +14,13 @@ logger = logging.getLogger(__name__)
 class MongoDBClient:
     """MongoDB client for MetalliSense AI Model Service"""
     
-    def __init__(self, connection_string: str = "mongodb://localhost:27017/", 
+    def __init__(self, connection_string: str = "mongodb+srv://akilesh:Akilesh%40123@cluster0.gmfo4jh.mongodb.net/", 
                  db_name: str = "MetalliSense"):
         """
         Initialize MongoDB client
         
         Args:
-            connection_string: MongoDB connection string
+            connection_string: MongoDB connection string (default: Atlas cluster)
             db_name: Database name (default: MetalliSense to match existing DB)
         """
         self.connection_string = connection_string
@@ -44,6 +44,8 @@ class MongoDBClient:
             return True
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
             logger.error(f"Failed to connect to MongoDB: {str(e)}")
+            self.client = None
+            self.db = None
             return False
     
     def close(self):
@@ -64,7 +66,7 @@ class MongoDBClient:
             bool: True if insertion successful, False otherwise
         """
         try:
-            if not self.db:
+            if self.db is None:
                 if not self.connect():
                     return False
             
@@ -91,7 +93,7 @@ class MongoDBClient:
             List of documents
         """
         try:
-            if not self.db:
+            if self.db is None:
                 if not self.connect():
                     return []
             
@@ -114,14 +116,14 @@ class MongoDBClient:
             List of metal grade specifications
         """
         try:
-            if not self.db:
+            if self.db is None:
                 if not self.connect():
                     return []
             
             collection = self.db["metal_grade_specs"]
             specs = list(collection.find())
             
-            if not specs:
+            if len(specs) == 0:
                 logger.warning("No metal grade specifications found in database")
             else:
                 logger.info(f"Retrieved {len(specs)} metal grade specifications")
@@ -142,7 +144,7 @@ class MongoDBClient:
             bool: True if drop successful, False otherwise
         """
         try:
-            if not self.db:
+            if self.db is None:
                 if not self.connect():
                     return False
             
@@ -164,7 +166,7 @@ class MongoDBClient:
             bool: True if collection exists, False otherwise
         """
         try:
-            if not self.db:
+            if self.db is None:
                 if not self.connect():
                     return False
             

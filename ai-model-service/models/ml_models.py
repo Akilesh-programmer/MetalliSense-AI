@@ -36,8 +36,12 @@ def train_grade_classifier(data: pd.DataFrame) -> Tuple[RandomForestClassifier, 
         Tuple of (trained classifier, scaler)
     """
     # Extract features and target
-    X = data[[col for col in data.columns if col.startswith('current_') and col != 'current_grade']]
-    y = data['current_grade']
+    feature_cols = [col for col in data.columns if col.startswith('current_')]
+    if not feature_cols:
+        raise ValueError("No current composition features found in data")
+    
+    X = data[feature_cols]
+    y = data['grade']
     
     # Scale features
     scaler = StandardScaler()
@@ -68,15 +72,23 @@ def train_composition_predictor(data: pd.DataFrame) -> Tuple[RandomForestRegress
         Tuple of (trained regressor, scaler)
     """
     # Extract features and target
-    X = data[[col for col in data.columns if col.startswith('current_') and col != 'current_grade']]
-    y = data[[col for col in data.columns if col.startswith('target_')]]
+    feature_cols = [col for col in data.columns if col.startswith('current_')]
+    target_cols = [col for col in data.columns if col.startswith('target_') and 'range' not in col]
+    
+    if not feature_cols:
+        raise ValueError("No current composition features found in data")
+    if not target_cols:
+        raise ValueError("No target composition features found in data")
+    
+    X = data[feature_cols]
+    y = data[target_cols]
     
     # Scale features
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    x_scaled = scaler.fit_transform(X)
     
     # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(x_scaled, y, test_size=0.2, random_state=42)
     
     # Train model
     model = RandomForestRegressor(n_estimators=100, random_state=42)
@@ -138,7 +150,9 @@ def train_success_predictor(data: pd.DataFrame) -> xgb.XGBClassifier:
         Trained XGBoost classifier
     """
     # Extract features and target
-    X = data[[col for col in data.columns if col != 'success']]
+    # Exclude categorical columns and success target
+    feature_cols = [col for col in data.columns if col not in ['success', 'grade', 'alloy'] and data[col].dtype in ['int64', 'float64']]
+    X = data[feature_cols]
     y = data['success']
     
     # Split data
