@@ -1,17 +1,26 @@
 """
-MetalliSense AI Model Service - Main FastAPI Application
-Provides ML-powered metal composition analysis and alloy addition recommendations
+Modified main.py to use refactored ML models
+Uses the new model loading approach instead of retraining on every startup
 """
+
+import sys
+import os
+
+# Add this to ensure the proper module can be imported
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import uvicorn
 import logging
 from datetime import datetime
 
-from models.ml_models import MetalCompositionAnalyzer
+# Import refactored ML models
+from models.ml_models_refactored import MetalCompositionAnalyzer
 from models.knowledge_base import MetalKnowledgeBase
 
 # Setup logging
@@ -33,201 +42,146 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize ML models and knowledge base
-ml_analyzer = MetalCompositionAnalyzer()
-knowledge_base = MetalKnowledgeBase()
-
-# Request/Response Models
-class SpectrometerReading(BaseModel):
-    """Input spectrometer reading data"""
-    Fe: float
+# Pydantic models for request/response
+class CompositionInput(BaseModel):
     C: float
     Si: float
     Mn: float
     P: float
     S: float
-    Cr: float = 0.0
-    Ni: float = 0.0
-    Mo: float = 0.0
-    Cu: float = 0.0
-    target_grade: str  # SG-IRON, GRAY-IRON, DUCTILE-IRON
+    Cr: float
+    Mo: float
+    Ni: float
+    Cu: float
+
+class ElementDeviation(BaseModel):
+    current: float
+    ideal: float
+    deviation: float
+    status: str
 
 class AlloyRecommendation(BaseModel):
-    """Single alloy addition recommendation"""
-    alloy_name: str
-    quantity_kg: float
-    cost_per_kg: float
-    total_cost: float
-    addition_sequence: int
-    purpose: str
-    safety_notes: str
+    alloy: str
+    amount: float
+    target_element: str
+    current_value: float
+    target_value: float
+    reason: str
+    success_probability: float
 
 class AnalysisResult(BaseModel):
-    """Complete analysis result with recommendations"""
-    analysis_id: str
-    timestamp: str
-    input_composition: Dict[str, float]
-    target_grade: str
-    current_grade_match: str
-    confidence_score: float
-    composition_status: str
-    deviations: Dict[str, Dict[str, float]]
+    grade: str
+    confidence: float
+    deviations: Dict[str, ElementDeviation]
     recommendations: List[AlloyRecommendation]
-    predicted_final_composition: Dict[str, float]
-    success_probability: float
-    total_estimated_cost: float
-    processing_notes: str
+    timestamp: datetime = datetime.now()
+
+# Initialize analyzer
+try:
+    analyzer = MetalCompositionAnalyzer()
+    logger.info("MetalCompositionAnalyzer initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize MetalCompositionAnalyzer: {str(e)}")
+    analyzer = None
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Root endpoint - service health check"""
     return {
+        "status": "running",
         "service": "MetalliSense AI Model Service",
-        "status": "operational",
         "version": "1.0.0",
-        "timestamp": datetime.now().isoformat()
+        "time": datetime.now().isoformat()
     }
 
 @app.get("/health")
 async def health_check():
-    """Detailed health check"""
-    try:
-        # Check if models are loaded
-        models_status = ml_analyzer.check_models_status()
-        knowledge_status = knowledge_base.check_status()
-        
+    """Health check endpoint"""
+    if analyzer is None:
         return {
-            "status": "healthy",
-            "models": models_status,
-            "knowledge_base": knowledge_status,
-            "timestamp": datetime.now().isoformat()
+            "status": "degraded",
+            "message": "ML analyzer not initialized",
+            "time": datetime.now().isoformat()
         }
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
+    return {
+        "status": "healthy",
+        "message": "Service is running normally",
+        "time": datetime.now().isoformat()
+    }
 
 @app.post("/analyze", response_model=AnalysisResult)
-async def analyze_composition(reading: SpectrometerReading):
+async def analyze_composition(composition: CompositionInput):
     """
-    Main endpoint for metal composition analysis and alloy recommendations
+    Analyze metal composition and provide recommendations
+    
+    Args:
+        composition: Current metal composition
+        
+    Returns:
+        Analysis results with recommendations
     """
+    if analyzer is None:
+        raise HTTPException(
+            status_code=503, 
+            detail="ML analyzer not initialized. Service is degraded."
+        )
+    
     try:
-        logger.info(f"Analyzing composition for target grade: {reading.target_grade}")
+        # Convert pydantic model to dict
+        composition_dict = composition.dict()
         
-        # Generate unique analysis ID
-        analysis_id = f"ANALYSIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Analyze composition
+        result = analyzer.analyze_composition(composition_dict)
         
-        # Convert input to dictionary
-        composition = {
-            "Fe": reading.Fe,
-            "C": reading.C,
-            "Si": reading.Si,
-            "Mn": reading.Mn,
-            "P": reading.P,
-            "S": reading.S,
-            "Cr": reading.Cr,
-            "Ni": reading.Ni,
-            "Mo": reading.Mo,
-            "Cu": reading.Cu
-        }
+        # Convert to AnalysisResult model
+        # First convert the deviations dict to use ElementDeviation objects
+        deviations_model = {}
+        for element, deviation_data in result["deviations"].items():
+            deviations_model[element] = ElementDeviation(**deviation_data)
         
-        # Perform ML analysis
-        analysis_result = ml_analyzer.analyze_composition(
-            composition=composition,
-            target_grade=reading.target_grade
+        # Create the full response
+        analysis_result = AnalysisResult(
+            grade=result["grade"],
+            confidence=result["confidence"],
+            deviations=deviations_model,
+            recommendations=result["recommendations"],
+            timestamp=datetime.now()
         )
         
-        # Generate recommendations
-        recommendations = ml_analyzer.generate_alloy_recommendations(
-            current_composition=composition,
-            target_grade=reading.target_grade,
-            analysis_result=analysis_result
-        )
-        
-        # Calculate success probability
-        success_prob = ml_analyzer.predict_success_probability(
-            current_composition=composition,
-            target_grade=reading.target_grade,
-            recommendations=recommendations
-        )
-        
-        # Format response
-        result = AnalysisResult(
-            analysis_id=analysis_id,
-            timestamp=datetime.now().isoformat(),
-            input_composition=composition,
-            target_grade=reading.target_grade,
-            current_grade_match=analysis_result["current_grade"],
-            confidence_score=analysis_result["confidence"],
-            composition_status=analysis_result["status"],
-            deviations=analysis_result["deviations"],
-            recommendations=recommendations,
-            predicted_final_composition=analysis_result["predicted_final"],
-            success_probability=success_prob,
-            total_estimated_cost=sum(rec.total_cost for rec in recommendations),
-            processing_notes=analysis_result["notes"]
-        )
-        
-        logger.info(f"Analysis completed: {analysis_id}")
-        return result
+        return analysis_result
         
     except Exception as e:
-        logger.error(f"Analysis failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        logger.error(f"Error analyzing composition: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error analyzing composition: {str(e)}"
+        )
 
 @app.get("/grades")
-async def get_supported_grades():
-    """Get list of supported metal grades"""
-    try:
-        grades = knowledge_base.get_supported_grades()
-        return {
-            "supported_grades": grades,
-            "count": len(grades)
-        }
-    except Exception as e:
-        logger.error(f"Failed to get grades: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get grades: {str(e)}")
+async def get_grades():
+    """Get available metal grades"""
+    knowledge_base = MetalKnowledgeBase()
+    return {"grades": list(knowledge_base.grades.keys())}
 
 @app.get("/alloys")
-async def get_available_alloys():
-    """Get list of available alloys for additions"""
-    try:
-        alloys = knowledge_base.get_available_alloys()
-        return {
-            "available_alloys": alloys,
-            "count": len(alloys)
-        }
-    except Exception as e:
-        logger.error(f"Failed to get alloys: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get alloys: {str(e)}")
+async def get_alloys():
+    """Get available alloys for addition"""
+    knowledge_base = MetalKnowledgeBase()
+    return {"alloys": knowledge_base.get_alloys()}
 
-@app.get("/composition-specs/{grade}")
-async def get_grade_specifications(grade: str):
-    """Get composition specifications for a specific grade"""
-    try:
-        specs = knowledge_base.get_grade_specifications(grade)
-        if not specs:
-            raise HTTPException(status_code=404, detail=f"Grade '{grade}' not found")
-        
-        return {
-            "grade": grade,
-            "specifications": specs
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get specifications: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get specifications: {str(e)}")
+@app.get("/grade/{grade_name}")
+async def get_grade_details(grade_name: str):
+    """Get details for a specific grade"""
+    knowledge_base = MetalKnowledgeBase()
+    grades = knowledge_base.grades
+    
+    if grade_name not in grades:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Grade '{grade_name}' not found"
+        )
+    
+    return {"grade": grade_name, "details": grades[grade_name]}
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)

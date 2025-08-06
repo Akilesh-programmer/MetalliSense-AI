@@ -1,6 +1,6 @@
 """
-ML Models for Metal Composition Analysis
-Contains all machine learning models for composition analysis and recommendations
+Refactored ML Models for Metal Composition Analysis
+Contains all machine learning models with proper architecture - train once, load pre-trained
 """
 
 import numpy as np
@@ -12,399 +12,430 @@ from sklearn.metrics import accuracy_score, mean_squared_error
 import xgboost as xgb
 import pickle
 import logging
+import os
 from typing import Dict, List, Tuple, Any
 import json
 from datetime import datetime
 
 from .knowledge_base import MetalKnowledgeBase
-from .data_generator import SyntheticDataGenerator
 
 logger = logging.getLogger(__name__)
+
+# Directory for trained models
+MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trained')
+
+# Model training functions (used by train_models.py, not by the service)
+def train_grade_classifier(data: pd.DataFrame) -> Tuple[RandomForestClassifier, StandardScaler]:
+    """
+    Train a grade classifier model
+    
+    Args:
+        data: DataFrame with training data
+        
+    Returns:
+        Tuple of (trained classifier, scaler)
+    """
+    # Extract features and target
+    X = data[[col for col in data.columns if col.startswith('current_') and col != 'current_grade']]
+    y = data['current_grade']
+    
+    # Scale features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+    
+    # Train model
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # Evaluate model
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    logger.info(f"Grade classifier accuracy: {accuracy:.4f}")
+    
+    return model, scaler
+
+def train_composition_predictor(data: pd.DataFrame) -> Tuple[RandomForestRegressor, StandardScaler]:
+    """
+    Train a composition predictor model
+    
+    Args:
+        data: DataFrame with training data
+        
+    Returns:
+        Tuple of (trained regressor, scaler)
+    """
+    # Extract features and target
+    X = data[[col for col in data.columns if col.startswith('current_') and col != 'current_grade']]
+    y = data[[col for col in data.columns if col.startswith('target_')]]
+    
+    # Scale features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+    
+    # Train model
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # Evaluate model
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    logger.info(f"Composition predictor MSE: {mse:.4f}")
+    
+    return model, scaler
+
+def train_confidence_estimator(data: pd.DataFrame) -> xgb.XGBRegressor:
+    """
+    Train a confidence estimator model
+    
+    Args:
+        data: DataFrame with training data
+        
+    Returns:
+        Trained XGBoost regressor
+    """
+    # Create feature: difference between current and target compositions
+    feature_cols = []
+    for element in ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']:
+        current_col = f'current_{element}'
+        target_col = f'target_{element}'
+        if current_col in data.columns and target_col in data.columns:
+            diff_col = f'diff_{element}'
+            data[diff_col] = np.abs(data[current_col] - data[target_col])
+            feature_cols.append(diff_col)
+    
+    # Extract features and target (using 'confidence' as target)
+    X = data[feature_cols]
+    y = data['confidence']
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Train model
+    model = xgb.XGBRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # Evaluate model
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    logger.info(f"Confidence estimator MSE: {mse:.4f}")
+    
+    return model
+
+def train_success_predictor(data: pd.DataFrame) -> xgb.XGBClassifier:
+    """
+    Train a success predictor model
+    
+    Args:
+        data: DataFrame with training data
+        
+    Returns:
+        Trained XGBoost classifier
+    """
+    # Extract features and target
+    X = data[[col for col in data.columns if col != 'success']]
+    y = data['success']
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Train model
+    model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # Evaluate model
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    logger.info(f"Success predictor accuracy: {accuracy:.4f}")
+    
+    return model
 
 class MetalCompositionAnalyzer:
     """Main ML analyzer for metal composition analysis and recommendations"""
     
     def __init__(self):
+        """Initialize analyzer with pre-trained models"""
         self.knowledge_base = MetalKnowledgeBase()
-        self.data_generator = SyntheticDataGenerator()
         
-        # ML Models
+        # Model attributes
         self.grade_classifier = None
+        self.grade_scaler = None
         self.composition_predictor = None
+        self.composition_scaler = None
         self.confidence_estimator = None
         self.success_predictor = None
         
-        # Scalers
-        self.scaler_features = StandardScaler()
-        self.scaler_targets = StandardScaler()
-        
-        # Model status
-        self.models_trained = False
-        
-        # Initialize and train models
-        self._initialize_models()
+        # Load pre-trained models
+        self.load_models()
     
-    def _initialize_models(self):
-        """Initialize and train all ML models"""
+    def load_models(self):
+        """Load pre-trained models from disk"""
         try:
-            logger.info("Initializing ML models...")
+            logger.info("Loading pre-trained ML models...")
             
-            # Generate synthetic training data
-            logger.info("Generating synthetic training data...")
-            training_data = self.data_generator.generate_comprehensive_dataset(50000)
+            # Check if models directory exists
+            if not os.path.exists(MODELS_DIR):
+                logger.error(f"Models directory not found: {MODELS_DIR}")
+                raise FileNotFoundError(f"Models directory not found: {MODELS_DIR}")
             
-            # Train models
-            self._train_grade_classifier(training_data)
-            self._train_composition_predictor(training_data)
-            self._train_confidence_estimator(training_data)
-            self._train_success_predictor(training_data)
+            # Load grade classifier
+            grade_classifier_path = os.path.join(MODELS_DIR, 'grade_classifier.pkl')
+            with open(grade_classifier_path, 'rb') as f:
+                self.grade_classifier = pickle.load(f)
             
-            self.models_trained = True
-            logger.info("All ML models initialized successfully")
+            # Load grade scaler
+            grade_scaler_path = os.path.join(MODELS_DIR, 'grade_scaler.pkl')
+            with open(grade_scaler_path, 'rb') as f:
+                self.grade_scaler = pickle.load(f)
+            
+            # Load composition predictor
+            composition_predictor_path = os.path.join(MODELS_DIR, 'composition_predictor.pkl')
+            with open(composition_predictor_path, 'rb') as f:
+                self.composition_predictor = pickle.load(f)
+            
+            # Load composition scaler
+            composition_scaler_path = os.path.join(MODELS_DIR, 'composition_scaler.pkl')
+            with open(composition_scaler_path, 'rb') as f:
+                self.composition_scaler = pickle.load(f)
+            
+            # Load confidence estimator
+            confidence_estimator_path = os.path.join(MODELS_DIR, 'confidence_estimator.pkl')
+            with open(confidence_estimator_path, 'rb') as f:
+                self.confidence_estimator = pickle.load(f)
+            
+            # Load success predictor
+            success_predictor_path = os.path.join(MODELS_DIR, 'success_predictor.pkl')
+            with open(success_predictor_path, 'rb') as f:
+                self.success_predictor = pickle.load(f)
+            
+            logger.info("All models loaded successfully")
             
         except Exception as e:
-            logger.error(f"Failed to initialize models: {str(e)}")
-            raise
+            logger.error(f"Failed to load pre-trained models: {str(e)}")
+            raise RuntimeError(f"Failed to load pre-trained models: {str(e)}")
     
-    def _train_grade_classifier(self, data: pd.DataFrame):
-        """Train grade classification model"""
-        logger.info("Training grade classifier...")
+    def predict_grade(self, composition: Dict[str, float]) -> str:
+        """
+        Predict the grade of a metal based on its composition
         
-        # Prepare features (composition elements)
-        feature_columns = ['Fe', 'C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Ni', 'Mo', 'Cu']
-        X = data[feature_columns].values
-        y = data['grade'].values
-        
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        Args:
+            composition: Dictionary of element concentrations
+            
+        Returns:
+            Predicted grade
+        """
+        # Extract features
+        features = np.array([[composition[element] for element in ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']]])
         
         # Scale features
-        X_train_scaled = self.scaler_features.fit_transform(X_train)
-        X_test_scaled = self.scaler_features.transform(X_test)
+        features_scaled = self.grade_scaler.transform(features)
         
-        # Train Random Forest classifier
-        self.grade_classifier = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=20,
-            random_state=42,
-            n_jobs=-1
-        )
-        self.grade_classifier.fit(X_train_scaled, y_train)
+        # Predict grade
+        grade = self.grade_classifier.predict(features_scaled)[0]
         
-        # Evaluate
-        y_pred = self.grade_classifier.predict(X_test_scaled)
-        accuracy = accuracy_score(y_test, y_pred)
-        logger.info(f"Grade classifier accuracy: {accuracy:.3f}")
+        return grade
     
-    def _train_composition_predictor(self, data: pd.DataFrame):
-        """Train composition prediction model"""
-        logger.info("Training composition predictor...")
+    def predict_target_composition(self, composition: Dict[str, float]) -> Dict[str, float]:
+        """
+        Predict the target composition based on current composition
         
-        # Prepare features and targets
-        feature_columns = ['Fe', 'C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Ni', 'Mo', 'Cu', 'grade_encoded']
-        target_columns = ['target_C', 'target_Si', 'target_Mn', 'target_P', 'target_S']
-        
-        # Encode grades
-        grade_encoding = {'SG-IRON': 0, 'GRAY-IRON': 1, 'DUCTILE-IRON': 2}
-        data['grade_encoded'] = data['grade'].map(grade_encoding)
-        
-        X = data[feature_columns].values
-        y = data[target_columns].values
-        
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
-        # Train XGBoost regressor
-        self.composition_predictor = xgb.XGBRegressor(
-            n_estimators=100,
-            max_depth=6,
-            learning_rate=0.1,
-            random_state=42,
-            n_jobs=-1
-        )
-        self.composition_predictor.fit(X_train, y_train)
-        
-        # Evaluate
-        y_pred = self.composition_predictor.predict(X_test)
-        mse = mean_squared_error(y_test, y_pred)
-        logger.info(f"Composition predictor MSE: {mse:.4f}")
-    
-    def _train_confidence_estimator(self, data: pd.DataFrame):
-        """Train confidence estimation model"""
-        logger.info("Training confidence estimator...")
-        
-        # Create confidence scores based on deviation from target
-        feature_columns = ['Fe', 'C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Ni', 'Mo', 'Cu']
-        X = data[feature_columns].values
-        
-        # Calculate confidence based on how close composition is to target
-        confidences = []
-        for _, row in data.iterrows():
-            grade = row['grade']
-            specs = self.knowledge_base.get_grade_specifications(grade)
+        Args:
+            composition: Dictionary of current element concentrations
             
-            total_deviation = 0
-            for element in feature_columns:
-                if element in specs['composition_ranges']:
-                    current = row[element]
-                    target = specs['composition_ranges'][element]['target']
-                    min_val = specs['composition_ranges'][element]['min']
-                    max_val = specs['composition_ranges'][element]['max']
-                    
-                    if min_val <= current <= max_val:
-                        deviation = abs(current - target) / (max_val - min_val)
-                    else:
-                        deviation = min(abs(current - min_val), abs(current - max_val)) / (max_val - min_val)
-                    
-                    total_deviation += deviation
-            
-            confidence = max(0.1, 1.0 - (total_deviation / len(feature_columns)))
-            confidences.append(confidence)
-        
-        y = np.array(confidences)
-        
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        Returns:
+            Dictionary of target element concentrations
+        """
+        # Extract features
+        features = np.array([[composition[element] for element in ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']]])
         
         # Scale features
-        X_train_scaled = self.scaler_features.transform(X_train)
-        X_test_scaled = self.scaler_features.transform(X_test)
+        features_scaled = self.composition_scaler.transform(features)
         
-        # Train Random Forest regressor
-        self.confidence_estimator = RandomForestRegressor(
-            n_estimators=100,
-            max_depth=15,
-            random_state=42,
-            n_jobs=-1
-        )
-        self.confidence_estimator.fit(X_train_scaled, y_train)
+        # Predict target composition
+        target_values = self.composition_predictor.predict(features_scaled)[0]
         
-        # Evaluate
-        y_pred = self.confidence_estimator.predict(X_test_scaled)
-        mse = mean_squared_error(y_test, y_pred)
-        logger.info(f"Confidence estimator MSE: {mse:.4f}")
+        # Create dictionary of target composition
+        elements = ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']
+        target_composition = {elements[i]: target_values[i] for i in range(len(elements))}
+        
+        return target_composition
     
-    def _train_success_predictor(self, data: pd.DataFrame):
-        """Train success probability predictor"""
-        logger.info("Training success predictor...")
+    def estimate_confidence(self, current_composition: Dict[str, float], 
+                           target_composition: Dict[str, float]) -> float:
+        """
+        Estimate the confidence in the analysis
         
-        # Create success labels based on achievability
-        feature_columns = ['Fe', 'C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Ni', 'Mo', 'Cu']
-        X = data[feature_columns].values
-        
-        # Calculate success probability based on deviation severity
-        success_probs = []
-        for _, row in data.iterrows():
-            grade = row['grade']
-            specs = self.knowledge_base.get_grade_specifications(grade)
+        Args:
+            current_composition: Dictionary of current element concentrations
+            target_composition: Dictionary of target element concentrations
             
-            out_of_range_count = 0
-            total_elements = 0
-            
-            for element in feature_columns:
-                if element in specs['composition_ranges']:
-                    current = row[element]
-                    min_val = specs['composition_ranges'][element]['min']
-                    max_val = specs['composition_ranges'][element]['max']
-                    
-                    if current < min_val or current > max_val:
-                        out_of_range_count += 1
-                    total_elements += 1
-            
-            success_prob = max(0.2, 1.0 - (out_of_range_count / total_elements))
-            success_probs.append(success_prob)
+        Returns:
+            Confidence score (0-100)
+        """
+        # Calculate differences between current and target compositions
+        diffs = []
+        for element in ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']:
+            diff = abs(current_composition[element] - target_composition[element])
+            diffs.append(diff)
         
-        y = np.array(success_probs)
+        # Predict confidence
+        confidence = self.confidence_estimator.predict(np.array([diffs]))[0]
         
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        # Ensure confidence is within range 0-100
+        confidence = max(0, min(100, confidence))
         
-        # Scale features
-        X_train_scaled = self.scaler_features.transform(X_train)
-        X_test_scaled = self.scaler_features.transform(X_test)
-        
-        # Train Random Forest regressor
-        self.success_predictor = RandomForestRegressor(
-            n_estimators=100,
-            max_depth=15,
-            random_state=42,
-            n_jobs=-1
-        )
-        self.success_predictor.fit(X_train_scaled, y_train)
-        
-        # Evaluate
-        y_pred = self.success_predictor.predict(X_test_scaled)
-        mse = mean_squared_error(y_test, y_pred)
-        logger.info(f"Success predictor MSE: {mse:.4f}")
+        return confidence
     
-    def analyze_composition(self, composition: Dict[str, float], target_grade: str) -> Dict[str, Any]:
-        """Main analysis function"""
-        if not self.models_trained:
-            raise RuntimeError("Models not trained yet")
+    def predict_success(self, recommendation_data: Dict) -> float:
+        """
+        Predict the success probability of a recommendation
         
-        # Prepare input features
-        feature_columns = ['Fe', 'C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Ni', 'Mo', 'Cu']
-        features = np.array([[composition.get(col, 0.0) for col in feature_columns]])
-        features_scaled = self.scaler_features.transform(features)
+        Args:
+            recommendation_data: Dictionary with recommendation data
+            
+        Returns:
+            Success probability (0-1)
+        """
+        # Extract features
+        features = []
+        for key in recommendation_data:
+            if isinstance(recommendation_data[key], (int, float)):
+                features.append(recommendation_data[key])
         
-        # Predict current grade
-        grade_probs = self.grade_classifier.predict_proba(features_scaled)[0]
-        grade_classes = self.grade_classifier.classes_
-        current_grade = grade_classes[np.argmax(grade_probs)]
+        # Predict success
+        success_prob = self.success_predictor.predict_proba(np.array([features]))[0][1]
         
-        # Calculate confidence
-        confidence = self.confidence_estimator.predict(features_scaled)[0]
-        confidence = max(0.1, min(1.0, confidence))
+        return success_prob
+    
+    def analyze_composition(self, composition: Dict[str, float]) -> Dict:
+        """
+        Analyze metal composition and provide recommendations
         
-        # Get target specifications
-        target_specs = self.knowledge_base.get_grade_specifications(target_grade)
-        if not target_specs:
-            raise ValueError(f"Unknown target grade: {target_grade}")
+        Args:
+            composition: Dictionary of element concentrations
+            
+        Returns:
+            Analysis results with recommendations
+        """
+        # Predict grade
+        predicted_grade = self.predict_grade(composition)
+        
+        # Get ideal composition for predicted grade
+        ideal_composition = self.knowledge_base.get_grade_ideal_composition(predicted_grade)
+        
+        # Predict target composition
+        target_composition = self.predict_target_composition(composition)
         
         # Calculate deviations
         deviations = {}
-        composition_status = "within_range"
-        critical_issues = []
-        
         for element, value in composition.items():
-            if element in target_specs['composition_ranges']:
-                deviation_info = self.knowledge_base.calculate_element_deviation(
-                    value, target_specs['composition_ranges'][element]
-                )
-                deviations[element] = deviation_info
-                
-                if deviation_info['status'] != 'within_range':
-                    composition_status = "requires_adjustment"
-                    if element in target_specs.get('critical_elements', []):
-                        critical_issues.append(element)
+            if element in ideal_composition:
+                ideal = ideal_composition[element]
+                current = value
+                deviation = current - ideal
+                status = "HIGH" if deviation > 0 else "LOW" if deviation < 0 else "OK"
+                deviations[element] = {
+                    "current": current,
+                    "ideal": ideal,
+                    "deviation": deviation,
+                    "status": status
+                }
         
-        # Predict final composition after adjustments
-        grade_encoded = {'SG-IRON': 0, 'GRAY-IRON': 1, 'DUCTILE-IRON': 2}.get(target_grade, 0)
-        prediction_features = np.concatenate([features[0], [grade_encoded]]).reshape(1, -1)
+        # Estimate confidence
+        confidence = self.estimate_confidence(composition, target_composition)
         
-        try:
-            predicted_adjustments = self.composition_predictor.predict(prediction_features)[0]
-            predicted_final = composition.copy()
-            adjustment_elements = ['C', 'Si', 'Mn', 'P', 'S']
-            
-            for i, element in enumerate(adjustment_elements):
-                if i < len(predicted_adjustments):
-                    predicted_final[element] = max(0, predicted_adjustments[i])
-        except:
-            predicted_final = composition.copy()
+        # Generate recommendations
+        recommendations = self.generate_recommendations(composition, target_composition, predicted_grade)
         
-        # Generate processing notes
-        notes = []
-        if critical_issues:
-            notes.append(f"Critical elements out of range: {', '.join(critical_issues)}")
-        if composition_status == "requires_adjustment":
-            notes.append("Composition adjustments required to meet target grade")
-        if confidence < 0.7:
-            notes.append("Low confidence - recommend careful monitoring")
-        
-        return {
-            "current_grade": current_grade,
-            "confidence": round(confidence, 3),
-            "status": composition_status,
+        # Create analysis result
+        result = {
+            "grade": predicted_grade,
+            "confidence": confidence,
             "deviations": deviations,
-            "predicted_final": predicted_final,
-            "notes": "; ".join(notes) if notes else "Composition analysis complete"
+            "recommendations": recommendations
         }
+        
+        return result
     
-    def generate_alloy_recommendations(self, current_composition: Dict[str, float], 
-                                     target_grade: str, analysis_result: Dict[str, Any]) -> List[Any]:
-        """Generate specific alloy addition recommendations"""
-        from app.main import AlloyRecommendation  # Import here to avoid circular import
+    def generate_recommendations(self, current_composition: Dict[str, float], 
+                               target_composition: Dict[str, float],
+                               grade: str) -> List[Dict]:
+        """
+        Generate alloy addition recommendations
         
+        Args:
+            current_composition: Current composition
+            target_composition: Target composition
+            grade: Metal grade
+            
+        Returns:
+            List of recommendation dictionaries
+        """
         recommendations = []
-        deviations = analysis_result["deviations"]
         
-        # Sort elements by severity of deviation
-        critical_elements = self.knowledge_base.get_critical_elements(target_grade)
-        elements_to_fix = []
+        # Get available alloys
+        alloys = self.knowledge_base.get_alloys()
         
-        for element, deviation_info in deviations.items():
-            if deviation_info["status"] != "within_range":
-                severity = abs(deviation_info["percentage_deviation"])
-                is_critical = element in critical_elements
-                elements_to_fix.append((element, deviation_info, severity, is_critical))
+        # Calculate required element changes
+        required_changes = {}
+        for element, target in target_composition.items():
+            if element in current_composition:
+                change = target - current_composition[element]
+                if abs(change) > 0.001:  # Only consider significant changes
+                    required_changes[element] = change
         
-        # Sort by criticality and severity
-        elements_to_fix.sort(key=lambda x: (not x[3], -x[2]))
-        
-        sequence = 1
-        for element, deviation_info, severity, is_critical in elements_to_fix[:5]:  # Limit to top 5
+        # Find alloys to add for each required change
+        for element, change in required_changes.items():
+            if change <= 0:
+                continue  # Skip if no addition needed
+                
+            # Find alloys containing this element
+            suitable_alloys = []
+            for alloy_name, alloy_data in alloys.items():
+                if element in alloy_data["composition"] and alloy_data["composition"][element] > 0:
+                    suitable_alloys.append((alloy_name, alloy_data))
             
-            need_increase = deviation_info["status"] == "below_range"
-            suggested_alloys = self.knowledge_base.suggest_alloys_for_element(element, need_increase)
+            if not suitable_alloys:
+                continue
+                
+            # Select best alloy (highest concentration of needed element)
+            best_alloy = max(suitable_alloys, 
+                           key=lambda x: x[1]["composition"][element])
             
-            if suggested_alloys:
-                alloy_name = suggested_alloys[0]  # Use best suggestion
-                alloy_data = self.knowledge_base.get_alloy_data(alloy_name)
-                cost_per_kg = self.knowledge_base.get_alloy_cost(alloy_name)
-                
-                # Calculate required quantity (simplified calculation)
-                deviation_amount = abs(deviation_info["deviation"])
-                base_quantity = max(0.1, min(10.0, deviation_amount * 5.0))  # Scale factor
-                
-                # Adjust for recovery rate
-                recovery_rate = alloy_data.get("recovery_rate", 0.9)
-                actual_quantity = base_quantity / recovery_rate
-                
-                # Calculate costs
-                total_cost = actual_quantity * cost_per_kg
-                
-                # Generate purpose and safety notes
-                purpose = f"Adjust {element} from {current_composition.get(element, 0):.3f}% to target range"
-                if need_increase:
-                    purpose += f" (increase by ~{deviation_amount:.3f}%)"
-                else:
-                    purpose += f" (decrease by ~{deviation_amount:.3f}%)"
-                
-                safety_notes = alloy_data.get("safety_notes", "Standard handling procedures")
-                
-                recommendation = AlloyRecommendation(
-                    alloy_name=alloy_name,
-                    quantity_kg=round(actual_quantity, 2),
-                    cost_per_kg=cost_per_kg,
-                    total_cost=round(total_cost, 2),
-                    addition_sequence=sequence,
-                    purpose=purpose,
-                    safety_notes=safety_notes
-                )
-                
-                recommendations.append(recommendation)
-                sequence += 1
+            alloy_name, alloy_data = best_alloy
+            
+            # Calculate amount to add
+            element_concentration = alloy_data["composition"][element]
+            amount = (change * 100) / element_concentration  # Amount in kg per 100kg of metal
+            
+            # Create recommendation
+            recommendation = {
+                "alloy": alloy_name,
+                "amount": round(amount, 2),
+                "target_element": element,
+                "current_value": current_composition[element],
+                "target_value": target_composition[element],
+                "reason": f"Increase {element} from {current_composition[element]:.3f} to {target_composition[element]:.3f}"
+            }
+            
+            # Predict success probability
+            rec_data = {
+                "amount": amount,
+                "current": current_composition[element],
+                "target": target_composition[element],
+                "concentration": element_concentration
+            }
+            success_prob = self.predict_success(rec_data)
+            recommendation["success_probability"] = round(success_prob * 100, 1)
+            
+            recommendations.append(recommendation)
+        
+        # Sort recommendations by success probability
+        recommendations.sort(key=lambda x: x["success_probability"], reverse=True)
         
         return recommendations
-    
-    def predict_success_probability(self, current_composition: Dict[str, float], 
-                                  target_grade: str, recommendations: List[Any]) -> float:
-        """Predict probability of successful grade achievement"""
-        if not self.models_trained:
-            return 0.5
-        
-        # Prepare features
-        feature_columns = ['Fe', 'C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Ni', 'Mo', 'Cu']
-        features = np.array([[current_composition.get(col, 0.0) for col in feature_columns]])
-        features_scaled = self.scaler_features.transform(features)
-        
-        # Predict success probability
-        success_prob = self.success_predictor.predict(features_scaled)[0]
-        
-        # Adjust based on number of recommendations (more recommendations = lower confidence)
-        adjustment_factor = max(0.7, 1.0 - (len(recommendations) * 0.05))
-        adjusted_prob = success_prob * adjustment_factor
-        
-        return round(max(0.1, min(1.0, adjusted_prob)), 3)
-    
-    def check_models_status(self) -> Dict[str, Any]:
-        """Check status of all models"""
-        return {
-            "grade_classifier": self.grade_classifier is not None,
-            "composition_predictor": self.composition_predictor is not None,
-            "confidence_estimator": self.confidence_estimator is not None,
-            "success_predictor": self.success_predictor is not None,
-            "models_trained": self.models_trained,
-            "scaler_fitted": hasattr(self.scaler_features, 'scale_')
-        }

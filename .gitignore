@@ -39,7 +39,6 @@ ENV/
 .env
 ai-model-service/venv/
 **/venv/
-**/__pycache__/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -50,16 +49,16 @@ ai-model-service/venv/
 # pipenv
 Pipfile.lock
 
-# Machine Learning
-*.pkl
+# Large ML model files (keep the structure)
+# But allow tracking small model files
 *.joblib
 *.h5
-*.model
-models/trained/
-data/processed/
-data/raw/
-logs/
-checkpoints/
+models/trained/*.pkl
+# Keep train_models.py and model definitions
+!models/train_models.py
+!models/ml_models.py
+!models/knowledge_base.py
+!models/data_generator.py
 
 # OS
 .DS_Store
@@ -70,9 +69,8 @@ checkpoints/
 ehthumbs.db
 Thumbs.db
 
-# Project specific
-/Requirements
-ai-model-service/data/
+# Log files
+logs/
 ai-model-service/logs/
 *.log
 
@@ -80,3 +78,4 @@ ai-model-service/logs/
 *.tmp
 *.temp
 .cache/
+*.bak

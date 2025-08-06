@@ -1,11 +1,14 @@
 """
-Metal Industry Knowledge Base
+Metal Industry Knowledge Base with MongoDB Integration
 Contains composition specifications, alloy data, and metallurgical rules
+Loads metal grade specifications from MongoDB
 """
 
 import json
+import os
 from typing import Dict, List, Optional, Any
 import logging
+from database.mongo_client import MongoDBClient
 
 logger = logging.getLogger(__name__)
 
@@ -13,12 +16,67 @@ class MetalKnowledgeBase:
     """Knowledge base containing metal grades, compositions, and alloy specifications"""
     
     def __init__(self):
-        self.grade_specifications = self._load_grade_specifications()
-        self.alloy_database = self._load_alloy_database()
-        self.cost_database = self._load_cost_database()
+        # Initialize MongoDB client to fetch grade specifications
+        self.mongo_client = MongoDBClient()
+        
+        # Load data
+        self.grades = self._load_grade_specifications()
+        self.alloys = self._load_alloy_database()
+        self.costs = self._load_cost_database()
         
     def _load_grade_specifications(self) -> Dict[str, Dict[str, Any]]:
-        """Load metal grade composition specifications"""
+        """
+        Load metal grade composition specifications from MongoDB
+        Falls back to hardcoded data if MongoDB is not available
+        """
+        grades = {}
+        
+        # Try to load from MongoDB first
+        try:
+            # Connect to MongoDB
+            if self.mongo_client.connect():
+                # Get specifications from metal_grade_specs collection
+                specs = self.mongo_client.get_metal_grade_specs()
+                
+                if specs:
+                    logger.info(f"Loaded {len(specs)} metal grade specifications from MongoDB")
+                    
+                    # Convert to the format needed by the application
+                    for spec in specs:
+                        grade_name = spec.get("metal_grade")
+                        composition_range = spec.get("composition_range", {})
+                        
+                        if grade_name and composition_range:
+                            # Create a standardized format for our application
+                            grade_data = {
+                                "description": f"{grade_name} Iron",
+                                "composition_ranges": {},
+                                "ideal_composition": {}
+                            }
+                            
+                            # Process each element's composition range
+                            for element, range_values in composition_range.items():
+                                if isinstance(range_values, list) and len(range_values) >= 2:
+                                    min_val = range_values[0]
+                                    max_val = range_values[1]
+                                    target_val = (min_val + max_val) / 2  # Use middle of range as target
+                                    
+                                    grade_data["composition_ranges"][element] = {
+                                        "min": min_val,
+                                        "max": max_val,
+                                        "target": target_val
+                                    }
+                                    
+                                    grade_data["ideal_composition"][element] = target_val
+                            
+                            grades[grade_name] = grade_data
+                    
+                    return grades
+        except Exception as e:
+            logger.error(f"Error loading grade specifications from MongoDB: {str(e)}")
+        
+        # Fall back to hardcoded specifications if MongoDB loading failed
+        logger.warning("Falling back to hardcoded grade specifications")
         return {
             "SG-IRON": {
                 "description": "Spheroidal Graphite Iron (Ductile Iron)",
@@ -28,248 +86,209 @@ class MetalKnowledgeBase:
                     "Mn": {"min": 0.3, "max": 0.8, "target": 0.5},
                     "P": {"min": 0.0, "max": 0.05, "target": 0.03},
                     "S": {"min": 0.0, "max": 0.02, "target": 0.01},
-                    "Cr": {"min": 0.0, "max": 0.3, "target": 0.1},
-                    "Ni": {"min": 0.0, "max": 1.0, "target": 0.2},
-                    "Mo": {"min": 0.0, "max": 0.5, "target": 0.1},
-                    "Cu": {"min": 0.0, "max": 1.0, "target": 0.3},
+                    "Cr": {"min": 0.0, "max": 0.1, "target": 0.05},
+                    "Mo": {"min": 0.0, "max": 0.1, "target": 0.05},
+                    "Ni": {"min": 0.0, "max": 0.1, "target": 0.05},
+                    "Cu": {"min": 0.0, "max": 0.3, "target": 0.15},
                     "Mg": {"min": 0.03, "max": 0.06, "target": 0.045}
                 },
-                "critical_elements": ["C", "Si", "Mg"],
-                "mechanical_properties": {
-                    "tensile_strength": {"min": 420, "unit": "MPa"},
-                    "yield_strength": {"min": 300, "unit": "MPa"},
-                    "elongation": {"min": 18, "unit": "%"}
+                "ideal_composition": {
+                    "C": 3.5, "Si": 2.5, "Mn": 0.5, "P": 0.03, "S": 0.01,
+                    "Cr": 0.05, "Mo": 0.05, "Ni": 0.05, "Cu": 0.15, "Mg": 0.045
                 }
             },
             "GRAY-IRON": {
                 "description": "Gray Cast Iron",
                 "composition_ranges": {
-                    "C": {"min": 2.8, "max": 3.8, "target": 3.3},
-                    "Si": {"min": 1.8, "max": 2.8, "target": 2.3},
-                    "Mn": {"min": 0.6, "max": 1.2, "target": 0.9},
+                    "C": {"min": 2.8, "max": 3.6, "target": 3.2},
+                    "Si": {"min": 1.8, "max": 2.4, "target": 2.1},
+                    "Mn": {"min": 0.4, "max": 1.0, "target": 0.7},
                     "P": {"min": 0.0, "max": 0.15, "target": 0.08},
-                    "S": {"min": 0.05, "max": 0.15, "target": 0.10},
-                    "Cr": {"min": 0.0, "max": 0.5, "target": 0.2},
-                    "Ni": {"min": 0.0, "max": 0.5, "target": 0.1},
-                    "Mo": {"min": 0.0, "max": 0.3, "target": 0.05},
-                    "Cu": {"min": 0.0, "max": 0.5, "target": 0.1}
+                    "S": {"min": 0.0, "max": 0.12, "target": 0.06},
+                    "Cr": {"min": 0.0, "max": 0.35, "target": 0.1},
+                    "Mo": {"min": 0.0, "max": 0.35, "target": 0.1},
+                    "Ni": {"min": 0.0, "max": 0.3, "target": 0.1},
+                    "Cu": {"min": 0.0, "max": 0.8, "target": 0.4}
                 },
-                "critical_elements": ["C", "Si"],
-                "mechanical_properties": {
-                    "tensile_strength": {"min": 200, "unit": "MPa"},
-                    "hardness": {"min": 170, "max": 250, "unit": "HB"}
+                "ideal_composition": {
+                    "C": 3.2, "Si": 2.1, "Mn": 0.7, "P": 0.08, "S": 0.06,
+                    "Cr": 0.1, "Mo": 0.1, "Ni": 0.1, "Cu": 0.4
                 }
             },
             "DUCTILE-IRON": {
-                "description": "Ductile Iron (Alternative specification)",
+                "description": "Ductile Cast Iron (Nodular Iron)",
                 "composition_ranges": {
-                    "C": {"min": 3.0, "max": 4.0, "target": 3.6},
-                    "Si": {"min": 2.2, "max": 2.8, "target": 2.5},
+                    "C": {"min": 3.4, "max": 4.0, "target": 3.7},
+                    "Si": {"min": 2.2, "max": 3.0, "target": 2.6},
                     "Mn": {"min": 0.2, "max": 0.6, "target": 0.4},
-                    "P": {"min": 0.0, "max": 0.08, "target": 0.04},
-                    "S": {"min": 0.0, "max": 0.03, "target": 0.015},
-                    "Cr": {"min": 0.0, "max": 0.2, "target": 0.05},
-                    "Ni": {"min": 0.0, "max": 2.0, "target": 0.5},
-                    "Mo": {"min": 0.0, "max": 0.8, "target": 0.2},
-                    "Cu": {"min": 0.0, "max": 1.5, "target": 0.5},
-                    "Mg": {"min": 0.035, "max": 0.065, "target": 0.05}
+                    "P": {"min": 0.0, "max": 0.04, "target": 0.02},
+                    "S": {"min": 0.0, "max": 0.015, "target": 0.01},
+                    "Cr": {"min": 0.0, "max": 0.08, "target": 0.04},
+                    "Mo": {"min": 0.0, "max": 0.08, "target": 0.04},
+                    "Ni": {"min": 0.0, "max": 0.08, "target": 0.04},
+                    "Cu": {"min": 0.0, "max": 0.4, "target": 0.2},
+                    "Mg": {"min": 0.035, "max": 0.07, "target": 0.05}
                 },
-                "critical_elements": ["C", "Si", "Mg"],
-                "mechanical_properties": {
-                    "tensile_strength": {"min": 500, "unit": "MPa"},
-                    "yield_strength": {"min": 320, "unit": "MPa"},
-                    "elongation": {"min": 12, "unit": "%"}
+                "ideal_composition": {
+                    "C": 3.7, "Si": 2.6, "Mn": 0.4, "P": 0.02, "S": 0.01,
+                    "Cr": 0.04, "Mo": 0.04, "Ni": 0.04, "Cu": 0.2, "Mg": 0.05
                 }
             }
         }
     
     def _load_alloy_database(self) -> Dict[str, Dict[str, Any]]:
-        """Load alloy addition database with compositions and effects"""
+        """Load alloy database with composition and properties"""
         return {
-            "Ferrosilicon-75": {
-                "composition": {"Si": 75.0, "Fe": 23.0, "C": 0.2, "Al": 1.5, "Ca": 0.3},
-                "density": 6.8,
-                "recovery_rate": 0.92,
-                "primary_effect": "Silicon addition",
-                "secondary_effects": ["Deoxidation", "Graphite formation"],
-                "typical_addition_rate": {"min": 0.5, "max": 3.0, "unit": "kg/ton"},
-                "cost_category": "medium",
-                "safety_notes": "Handle with care - may generate hydrogen gas"
+            "FeSi-75": {
+                "description": "Ferrosilicon 75%",
+                "composition": {
+                    "Fe": 25.0,
+                    "Si": 75.0
+                },
+                "form": "lumps",
+                "density": 4.2,  # g/cm³
+                "melting_point": 1200,  # °C
+                "typical_uses": ["deoxidizer", "silicon addition"]
             },
-            "Ferromanganese-80": {
-                "composition": {"Mn": 80.0, "Fe": 18.0, "C": 1.5, "Si": 0.5},
-                "density": 7.2,
-                "recovery_rate": 0.95,
-                "primary_effect": "Manganese addition",
-                "secondary_effects": ["Deoxidation", "Desulfurization", "Hardenability"],
-                "typical_addition_rate": {"min": 0.2, "max": 1.5, "unit": "kg/ton"},
-                "cost_category": "medium",
-                "safety_notes": "Standard handling procedures"
+            "HC-FeMn": {
+                "description": "High Carbon Ferromanganese",
+                "composition": {
+                    "Fe": 21.5,
+                    "Mn": 75.0,
+                    "C": 7.5
+                },
+                "form": "lumps",
+                "density": 7.3,  # g/cm³
+                "melting_point": 1260,  # °C
+                "typical_uses": ["manganese addition", "desulfurizer"]
             },
-            "Pig-Iron": {
-                "composition": {"C": 4.2, "Si": 1.8, "Mn": 0.8, "P": 0.1, "S": 0.05, "Fe": 93.0},
-                "density": 7.1,
-                "recovery_rate": 0.98,
-                "primary_effect": "Carbon and iron addition",
-                "secondary_effects": ["Base iron content adjustment"],
-                "typical_addition_rate": {"min": 5.0, "max": 50.0, "unit": "kg/ton"},
-                "cost_category": "low",
-                "safety_notes": "Standard handling procedures"
+            "FeSiMg-5": {
+                "description": "Ferrosilicon Magnesium 5%",
+                "composition": {
+                    "Fe": 45.0,
+                    "Si": 45.0,
+                    "Mg": 5.0,
+                    "Ca": 2.0,
+                    "RE": 3.0
+                },
+                "form": "lumps",
+                "density": 3.9,  # g/cm³
+                "melting_point": 1200,  # °C
+                "typical_uses": ["nodularizer", "magnesium addition"]
             },
-            "Steel-Scrap": {
-                "composition": {"C": 0.3, "Si": 0.2, "Mn": 0.8, "P": 0.04, "S": 0.05, "Fe": 98.6},
-                "density": 7.8,
-                "recovery_rate": 0.96,
-                "primary_effect": "Iron dilution",
-                "secondary_effects": ["Carbon reduction", "Cleaner composition"],
-                "typical_addition_rate": {"min": 10.0, "max": 100.0, "unit": "kg/ton"},
-                "cost_category": "low",
-                "safety_notes": "Check for contamination"
+            "FeCr-HC": {
+                "description": "High Carbon Ferrochrome",
+                "composition": {
+                    "Fe": 40.0,
+                    "Cr": 60.0,
+                    "C": 4.0
+                },
+                "form": "lumps",
+                "density": 7.5,  # g/cm³
+                "melting_point": 1550,  # °C
+                "typical_uses": ["chromium addition"]
             },
-            "Ferrosilicon-45": {
-                "composition": {"Si": 45.0, "Fe": 53.0, "C": 0.3, "Al": 1.5, "Ca": 0.2},
-                "density": 6.9,
-                "recovery_rate": 0.90,
-                "primary_effect": "Moderate silicon addition",
-                "secondary_effects": ["Deoxidation"],
-                "typical_addition_rate": {"min": 1.0, "max": 5.0, "unit": "kg/ton"},
-                "cost_category": "low",
-                "safety_notes": "Handle with care"
+            "FeMo": {
+                "description": "Ferromolybdenum",
+                "composition": {
+                    "Fe": 40.0,
+                    "Mo": 60.0
+                },
+                "form": "lumps",
+                "density": 9.3,  # g/cm³
+                "melting_point": 1550,  # °C
+                "typical_uses": ["molybdenum addition"]
             },
-            "Nickel": {
-                "composition": {"Ni": 99.0, "C": 0.1, "Si": 0.1, "Fe": 0.8},
-                "density": 8.9,
-                "recovery_rate": 0.98,
-                "primary_effect": "Nickel addition",
-                "secondary_effects": ["Strength improvement", "Corrosion resistance"],
-                "typical_addition_rate": {"min": 0.1, "max": 2.0, "unit": "kg/ton"},
-                "cost_category": "high",
-                "safety_notes": "Valuable alloy - precise dosing required"
+            "FeNi": {
+                "description": "Ferronickel",
+                "composition": {
+                    "Fe": 50.0,
+                    "Ni": 50.0
+                },
+                "form": "lumps",
+                "density": 8.5,  # g/cm³
+                "melting_point": 1450,  # °C
+                "typical_uses": ["nickel addition"]
             },
-            "Copper": {
-                "composition": {"Cu": 99.5, "O": 0.3, "Ag": 0.2},
-                "density": 8.96,
-                "recovery_rate": 0.97,
-                "primary_effect": "Copper addition",
-                "secondary_effects": ["Strength improvement", "Corrosion resistance"],
-                "typical_addition_rate": {"min": 0.2, "max": 1.5, "unit": "kg/ton"},
-                "cost_category": "high",
-                "safety_notes": "Valuable alloy - precise dosing required"
+            "FeCu": {
+                "description": "Copper Shot",
+                "composition": {
+                    "Cu": 99.9
+                },
+                "form": "shot",
+                "density": 8.96,  # g/cm³
+                "melting_point": 1085,  # °C
+                "typical_uses": ["copper addition"]
             },
-            "Molybdenum": {
-                "composition": {"Mo": 99.0, "C": 0.1, "Si": 0.1, "Fe": 0.8},
-                "density": 10.2,
-                "recovery_rate": 0.95,
-                "primary_effect": "Molybdenum addition",
-                "secondary_effects": ["Hardenability", "High temperature strength"],
-                "typical_addition_rate": {"min": 0.05, "max": 0.8, "unit": "kg/ton"},
-                "cost_category": "very_high",
-                "safety_notes": "Expensive alloy - use sparingly"
+            "SiC": {
+                "description": "Silicon Carbide",
+                "composition": {
+                    "Si": 70.0,
+                    "C": 30.0
+                },
+                "form": "powder",
+                "density": 3.21,  # g/cm³
+                "melting_point": 2730,  # °C
+                "typical_uses": ["carbon addition", "silicon addition"]
             },
-            "Magnesium": {
-                "composition": {"Mg": 99.8, "Al": 0.1, "Zn": 0.1},
-                "density": 1.74,
-                "recovery_rate": 0.70,
-                "primary_effect": "Spheroidization agent",
-                "secondary_effects": ["Nodular graphite formation"],
-                "typical_addition_rate": {"min": 0.3, "max": 0.8, "unit": "kg/ton"},
-                "cost_category": "high",
-                "safety_notes": "EXTREME CAUTION - Reacts violently with moisture"
+            "C-Raiser": {
+                "description": "Carbon Raiser",
+                "composition": {
+                    "C": 99.0
+                },
+                "form": "granules",
+                "density": 2.1,  # g/cm³
+                "melting_point": 3500,  # °C (sublimation point)
+                "typical_uses": ["carbon addition"]
             }
         }
     
     def _load_cost_database(self) -> Dict[str, float]:
-        """Load cost database (USD per kg)"""
+        """Load cost database for alloys (USD per kg)"""
         return {
-            "Ferrosilicon-75": 1.2,
-            "Ferromanganese-80": 1.8,
-            "Pig-Iron": 0.5,
-            "Steel-Scrap": 0.3,
-            "Ferrosilicon-45": 0.9,
-            "Nickel": 15.0,
-            "Copper": 8.5,
-            "Molybdenum": 45.0,
-            "Magnesium": 3.5
+            "FeSi-75": 1.8,
+            "HC-FeMn": 2.2,
+            "FeSiMg-5": 3.5,
+            "FeCr-HC": 3.8,
+            "FeMo": 35.0,
+            "FeNi": 15.0,
+            "FeCu": 9.0,
+            "SiC": 2.5,
+            "C-Raiser": 1.2
         }
     
-    def get_supported_grades(self) -> List[str]:
-        """Get list of supported metal grades"""
-        return list(self.grade_specifications.keys())
+    def get_grade_ideal_composition(self, grade: str) -> Dict[str, float]:
+        """Get ideal composition for a specific grade"""
+        if grade in self.grades:
+            return self.grades[grade]["ideal_composition"]
+        else:
+            logger.warning(f"Grade {grade} not found in knowledge base")
+            return {}
     
-    def get_available_alloys(self) -> List[str]:
-        """Get list of available alloys"""
-        return list(self.alloy_database.keys())
+    def get_grade_composition_ranges(self, grade: str) -> Dict[str, Dict[str, float]]:
+        """Get composition ranges for a specific grade"""
+        if grade in self.grades:
+            return self.grades[grade]["composition_ranges"]
+        else:
+            logger.warning(f"Grade {grade} not found in knowledge base")
+            return {}
     
-    def get_grade_specifications(self, grade: str) -> Optional[Dict[str, Any]]:
-        """Get specifications for a specific grade"""
-        return self.grade_specifications.get(grade)
+    def get_alloys(self) -> Dict[str, Dict[str, Any]]:
+        """Get all available alloys"""
+        return self.alloys
     
-    def get_alloy_data(self, alloy: str) -> Optional[Dict[str, Any]]:
-        """Get data for a specific alloy"""
-        return self.alloy_database.get(alloy)
+    def get_alloy_details(self, alloy: str) -> Dict[str, Any]:
+        """Get details for a specific alloy"""
+        if alloy in self.alloys:
+            return self.alloys[alloy]
+        else:
+            logger.warning(f"Alloy {alloy} not found in knowledge base")
+            return {}
     
     def get_alloy_cost(self, alloy: str) -> float:
-        """Get cost per kg for an alloy"""
-        return self.cost_database.get(alloy, 0.0)
-    
-    def calculate_element_deviation(self, current: float, target_range: Dict[str, float]) -> Dict[str, float]:
-        """Calculate deviation from target range"""
-        min_val = target_range["min"]
-        max_val = target_range["max"]
-        target_val = target_range["target"]
-        
-        if current < min_val:
-            deviation = current - min_val
-            status = "below_range"
-        elif current > max_val:
-            deviation = current - max_val
-            status = "above_range"
+        """Get cost for a specific alloy"""
+        if alloy in self.costs:
+            return self.costs[alloy]
         else:
-            deviation = current - target_val
-            status = "within_range"
-        
-        return {
-            "deviation": round(deviation, 4),
-            "percentage_deviation": round((deviation / target_val) * 100, 2) if target_val > 0 else 0,
-            "status": status
-        }
-    
-    def get_critical_elements(self, grade: str) -> List[str]:
-        """Get critical elements for a grade"""
-        specs = self.get_grade_specifications(grade)
-        return specs.get("critical_elements", []) if specs else []
-    
-    def suggest_alloys_for_element(self, element: str, increase: bool = True) -> List[str]:
-        """Suggest alloys that can modify a specific element"""
-        suitable_alloys = []
-        
-        for alloy_name, alloy_data in self.alloy_database.items():
-            composition = alloy_data["composition"]
-            
-            if element in composition:
-                element_content = composition[element]
-                
-                # If we want to increase the element and alloy has significant content
-                if increase and element_content > 1.0:
-                    suitable_alloys.append(alloy_name)
-                # If we want to decrease, suggest dilution alloys (low element content)
-                elif not increase and element_content < 1.0:
-                    suitable_alloys.append(alloy_name)
-        
-        # Sort by effectiveness (higher element content first for increases)
-        if increase:
-            suitable_alloys.sort(
-                key=lambda x: self.alloy_database[x]["composition"].get(element, 0),
-                reverse=True
-            )
-        
-        return suitable_alloys[:3]  # Return top 3 suggestions
-    
-    def check_status(self) -> Dict[str, Any]:
-        """Check knowledge base status"""
-        return {
-            "grades_loaded": len(self.grade_specifications),
-            "alloys_loaded": len(self.alloy_database),
-            "costs_loaded": len(self.cost_database),
-            "status": "operational"
-        }
+            logger.warning(f"Cost for alloy {alloy} not found in knowledge base")
+            return 0.0
