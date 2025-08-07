@@ -82,6 +82,17 @@ class EnhancedMLTrainer:
                     objective='binary:logistic'
                 )
                 test_model.fit(test_X, test_y)
+                
+                # Also test predict_proba which can have different device compatibility issues
+                try:
+                    # Test the predict_proba method explicitly
+                    test_X_device_ready = self._ensure_device_compatibility(test_model, test_X, for_predict_proba=True)
+                    proba = test_model.predict_proba(test_X_device_ready)
+                    logger.info("✅ GPU acceleration fully available for XGBoost (including predict_proba)")
+                except Exception as e:
+                    logger.warning(f"⚠️ predict_proba with GPU has limitations: {e}")
+                    logger.info("⚠️ Will use CPU fallback for predict_proba operations")
+                
                 logger.info("✅ GPU acceleration available for XGBoost")
             except Exception as e:
                 logger.warning(f"⚠️ GPU not available for XGBoost: {e}")
@@ -271,8 +282,9 @@ class EnhancedMLTrainer:
         
         # Get top-3 accuracy
         if hasattr(model, 'predict_proba'):
-            # For predict_proba, we don't use DMatrix conversion
-            y_proba = model.predict_proba(X_test_scaled)
+            # Ensure data is on the right device for predict_proba
+            X_test_proba_ready = self._ensure_device_compatibility(model, X_test_scaled, for_predict_proba=True)
+            y_proba = model.predict_proba(X_test_proba_ready)
             top3_acc = self._calculate_top_k_accuracy(y_test, y_proba, k=3)
             top5_acc = self._calculate_top_k_accuracy(y_test, y_proba, k=5)
             logger.info(f"📊 Top-3 Accuracy: {top3_acc:.4f}")
@@ -738,9 +750,10 @@ class EnhancedMLTrainer:
                 'reg_lambda': [1e-9, 1e-6, 1e-3, 0.01, 0.1, 1.0]
             }
             
+            # For cross-validation, use CPU to avoid device mismatch warnings
             model = xgb.XGBRegressor(
                 tree_method='hist',
-                device='cuda' if self.use_gpu else 'cpu',
+                device='cpu',  # Always use CPU for cross-validation
                 objective='reg:squarederror',
                 random_state=42
             )
@@ -774,9 +787,10 @@ class EnhancedMLTrainer:
                 'reg_lambda': Real(1e-9, 1.0, prior='log-uniform')
             }
             
+            # For cross-validation, use CPU to avoid device mismatch warnings
             model = xgb.XGBRegressor(
                 tree_method='hist',
-                device='cuda' if self.use_gpu else 'cpu',
+                device='cpu',  # Always use CPU for cross-validation
                 objective='reg:squarederror',
                 random_state=42,
                 n_jobs=-1
@@ -808,9 +822,10 @@ class EnhancedMLTrainer:
                 'learning_rate': [0.01, 0.05, 0.1, 0.2],
             }
             
+            # For cross-validation, use CPU to avoid device mismatch warnings
             model = xgb.XGBRegressor(
                 tree_method='hist',
-                device='cuda' if self.use_gpu else 'cpu',
+                device='cpu',  # Always use CPU for cross-validation
                 objective='reg:squarederror',
                 random_state=42
             )
@@ -979,34 +994,48 @@ class EnhancedMLTrainer:
         Args:
             model: The model to check for device compatibility
             X: The input data for prediction
-            for_predict_proba: If True, skip conversion as predict_proba doesn't work with DMatrix
+            for_predict_proba: If True, use different conversion method as predict_proba handles data differently
             
         Returns:
             The input data, possibly converted to a format compatible with the model's device
         """
-        # Skip conversion for predict_proba as it doesn't work with DMatrix
-        if for_predict_proba:
-            return X
-            
         # Check if it's an XGBoost model and we're using GPU
         if self.use_gpu and hasattr(model, 'get_params') and 'device' in model.get_params() and model.get_params()['device'] == 'cuda':
-            try:
-                # Create DMatrix for XGBoost models to handle device compatibility
-                if isinstance(X, xgb.DMatrix):
+            # For predict_proba, we need a different approach since DMatrix doesn't work directly with predict_proba
+            if for_predict_proba:
+                try:
+                    # Get data array
+                    if hasattr(X, 'values'):  # For pandas DataFrame
+                        x_values = X.values
+                    else:
+                        x_values = X
+                    
+                    # For predict_proba, we need to ensure data is in numpy array format
+                    logger.debug("🔄 Ensuring data is in correct format for predict_proba with GPU")
+                    return np.asarray(x_values)
+                except Exception as e:
+                    logger.warning(f"⚠️ Warning: Could not format data for predict_proba GPU compatibility: {e}")
                     return X
-                
-                # Get data array
-                if hasattr(X, 'values'):  # For pandas DataFrame
-                    x_values = X.values
-                else:
-                    x_values = X
-                
-                # Create DMatrix
-                return xgb.DMatrix(x_values)
-            except Exception as e:
-                logger.warning(f"⚠️ Warning: Could not convert data for GPU compatibility: {e}")
-                # If conversion fails, return original data
-                return X
+            else:
+                try:
+                    # If already a DMatrix, return it
+                    if isinstance(X, xgb.DMatrix):
+                        return X
+                    
+                    # Get data array
+                    if hasattr(X, 'values'):  # For pandas DataFrame
+                        x_values = X.values
+                    else:
+                        x_values = X
+                    
+                    # Create DMatrix with explicit device specification
+                    logger.debug("🔄 Converting data to DMatrix for GPU compatibility")
+                    dmatrix = xgb.DMatrix(x_values)
+                    return dmatrix
+                except Exception as e:
+                    logger.warning(f"⚠️ Warning: Could not convert data for GPU compatibility: {e}")
+                    # If conversion fails, return original data
+                    return X
         
         # For non-XGBoost models or CPU XGBoost, return the original data
         return X
