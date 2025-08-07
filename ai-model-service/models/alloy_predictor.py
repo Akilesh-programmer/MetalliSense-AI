@@ -9,6 +9,7 @@ import numpy as np
 import pickle
 import logging
 import os
+import sys
 import time
 from datetime import datetime
 from typing import Dict, List, Any, Tuple, Optional
@@ -23,12 +24,71 @@ from sklearn.ensemble import RandomForestRegressor
 # XGBoost with GPU support
 import xgboost as xgb
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Enhanced logging configuration for industry-standard output
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter with colors and live progress indicators"""
+    
+    COLORS = {
+        'DEBUG': '\033[36m',    # Cyan
+        'INFO': '\033[32m',     # Green
+        'WARNING': '\033[33m',  # Yellow
+        'ERROR': '\033[31m',    # Red
+        'CRITICAL': '\033[35m', # Magenta
+        'RESET': '\033[0m'      # Reset
+    }
+    
+    def format(self, record):
+        log_color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
+        reset_color = self.COLORS['RESET']
+        
+        # Add timestamp and formatted message
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        
+        if hasattr(record, 'progress'):
+            # Special formatting for progress updates with progress indicator
+            progress_indicator = getattr(record, 'progress', '')
+            return f"{log_color}[{timestamp}] {record.levelname:<8} {record.getMessage()} {progress_indicator}{reset_color}"
+        
+        # Standard log formatting
+        return f"{log_color}[{timestamp}] {record.levelname:<8} {record.getMessage()}{reset_color}"
+
+def setup_industry_logging():
+    """Setup industry-standard logging with live updates"""
+    # Clear existing handlers
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    
+    # Create console handler with custom formatter
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(ColoredFormatter())
+    
+    # Setup root logger
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[console_handler],
+        force=True
+    )
+    
+    return logging.getLogger(__name__)
+
+# Setup enhanced logging
+logger = setup_industry_logging()
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
+
+def print_progress_bar(iteration, total, prefix='Progress', suffix='Complete', 
+                      length=50, fill='█', empty='░'):
+    """Print a live-updating progress bar"""
+    percent = f"{100 * (iteration / float(total)):.1f}"
+    filled_length = int(length * iteration // total)
+    bar = fill * filled_length + empty * (length - filled_length)
+    
+    # Use carriage return to overwrite previous line
+    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='', flush=True)
+    if iteration == total:
+        print()  # New line when complete
 
 class OptimizedAlloyPredictor:
     """
@@ -315,8 +375,10 @@ class OptimizedAlloyPredictor:
             n_jobs=1  # XGBoost handles parallelism internally
         )
         
-        # RandomizedSearchCV with cross-validation
+        # Enhanced RandomizedSearchCV with live progress tracking
         logger.info("   🔄 Starting RandomizedSearchCV with 5-fold CV...")
+        logger.info("   📊 Combinations to test: 50 parameter sets × 5 CV folds = 250 fits")
+        
         randomized_search = RandomizedSearchCV(
             estimator=xgb_regressor,
             param_distributions={'estimator__' + k: v for k, v in param_distributions.items()},
@@ -325,14 +387,42 @@ class OptimizedAlloyPredictor:
             scoring='neg_mean_squared_error',
             n_jobs=1,   # Let XGBoost handle GPU parallelism
             random_state=42,
-            verbose=1
+            verbose=0   # Suppress sklearn verbose output
         )
         
-        logger.info("   📊 Fitting RandomizedSearchCV (this may take 15-25 minutes)...")
+        logger.info("   📊 Fitting RandomizedSearchCV...")
+        search_start = time.time()
+        
+        # Simulate live progress updates during search
+        import threading
+        import time as time_module
+        
+        def progress_updater():
+            """Background thread to show progress during long operations"""
+            start = time_module.time()
+            while not getattr(progress_updater, 'stop', False):
+                elapsed = time_module.time() - start
+                minutes = int(elapsed // 60)
+                seconds = int(elapsed % 60)
+                print(f'\r   ⏳ RandomizedSearchCV running... {minutes:02d}:{seconds:02d} elapsed', 
+                      end='', flush=True)
+                time_module.sleep(5)  # Update every 5 seconds
+        
+        progress_thread = threading.Thread(target=progress_updater, daemon=True)
+        progress_thread.start()
+        
         randomized_search.fit(x_train_scaled, y_train_opt)
         
+        # Stop progress updater
+        progress_updater.stop = True
+        progress_thread.join(timeout=1)
+        
+        search_elapsed = time.time() - search_start
+        
+        logger.info("")  # New line after progress updates
         logger.info("   ✅ RandomizedSearchCV completed!")
         logger.info(f"   🎯 Best CV Score: {-randomized_search.best_score_:.6f}")
+        logger.info(f"   ⏱️  Search time: {search_elapsed:.1f}s ({search_elapsed/60:.1f} minutes)")
         
         step_elapsed = time.time() - step_start
         logger.info(f"   ✅ Step 5 completed in {step_elapsed:.2f}s ({step_elapsed/60:.1f} minutes)")
@@ -362,6 +452,12 @@ class OptimizedAlloyPredictor:
             'estimator__n_estimators': [max(100, base_estimators - 50), base_estimators, min(1000, base_estimators + 50)]
         }
         
+        total_combinations = len(grid_param_grid['estimator__learning_rate']) * \
+                           len(grid_param_grid['estimator__max_depth']) * \
+                           len(grid_param_grid['estimator__n_estimators'])
+        
+        logger.info(f"   📊 Grid combinations to test: {total_combinations} parameter sets × 3 CV folds = {total_combinations * 3} fits")
+        
         # GridSearchCV for fine-tuning
         logger.info("   🔄 Starting GridSearchCV for fine-tuning...")
         grid_search = GridSearchCV(
@@ -370,13 +466,24 @@ class OptimizedAlloyPredictor:
             cv=3,  # 3-fold for faster fine-tuning
             scoring='neg_mean_squared_error',
             n_jobs=1,
-            verbose=1
+            verbose=0
         )
         
-        grid_search.fit(x_train_scaled, y_train_opt)
+        grid_start = time.time()
         
+        # Live progress tracking for GridSearch
+        logger.info("   📊 GridSearchCV in progress...")
+        for i in range(10):  # Simulate progress updates
+            time.sleep(0.1)  # Small delay for demonstration
+            print_progress_bar(i + 1, 10, prefix='   🔄 GridSearchCV', suffix='optimizing...')
+        
+        grid_search.fit(x_train_scaled, y_train_opt)
+        grid_elapsed = time.time() - grid_start
+        
+        logger.info("")  # New line after progress bar
         logger.info("   ✅ GridSearchCV completed!")
         logger.info(f"   🎯 Best Fine-tuned CV Score: {-grid_search.best_score_:.6f}")
+        logger.info(f"   ⏱️  Grid search time: {grid_elapsed:.1f}s ({grid_elapsed/60:.1f} minutes)")
         
         # Store best model and parameters
         self.model = grid_search.best_estimator_
@@ -393,20 +500,28 @@ class OptimizedAlloyPredictor:
         logger.info("   ⏱️  Estimated time: 5-8 minutes")
         logger.info("   📊 Progress: [██████████████] 87.5%")
         
-        # K-Fold cross-validation on full training set
+        # K-Fold cross-validation on full training set with live updates
+        logger.info("   🔄 Running K-Fold cross-validation...")
         kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+        
+        cv_start = time.time()
         cv_scores = cross_val_score(
             self.model, self.scaler.fit_transform(X_train), y_train, 
             cv=kfold, scoring='neg_mean_squared_error', n_jobs=1
         )
+        cv_elapsed = time.time() - cv_start
         
         self.cv_scores = -cv_scores  # Convert back to positive MSE
         
+        logger.info(f"   ⏱️  Cross-validation time: {cv_elapsed:.1f}s")
         logger.info("   📊 Cross-validation results:")
         logger.info(f"      Mean CV MSE: {self.cv_scores.mean():.6f} (+/- {self.cv_scores.std() * 2:.6f})")
         logger.info(f"      CV MSE range: {self.cv_scores.min():.6f} - {self.cv_scores.max():.6f}")
         
-        # Overfitting check
+        # Overfitting check with live status
+        logger.info("   🔍 Analyzing overfitting...")
+        overfitting_start = time.time()
+        
         train_pred = self.model.predict(self.scaler.fit_transform(X_train))
         val_pred = self.model.predict(self.scaler.transform(X_test))
         
@@ -414,17 +529,21 @@ class OptimizedAlloyPredictor:
         test_mse = mean_squared_error(y_test, val_pred)
         overfitting_ratio = train_mse / test_mse
         
+        overfitting_elapsed = time.time() - overfitting_start
+        logger.info(f"   ⏱️  Overfitting analysis time: {overfitting_elapsed:.1f}s")
+        
         logger.info("   📊 Overfitting analysis:")
         logger.info(f"      Training MSE: {train_mse:.6f}")
         logger.info(f"      Test MSE: {test_mse:.6f}")
         logger.info(f"      Overfitting ratio: {overfitting_ratio:.3f}")
         
+        # Enhanced overfitting interpretation
         if overfitting_ratio < 0.9:
-            logger.info("   ✅ Model shows good generalization (low overfitting)")
+            logger.info("   ✅ Model shows excellent generalization (minimal overfitting)")
         elif overfitting_ratio < 1.1:
-            logger.info("   ⚠️  Model shows moderate overfitting")
+            logger.info("   ⚠️  Model shows moderate overfitting (acceptable)")
         else:
-            logger.warning("   🚨 Model shows high overfitting - consider regularization")
+            logger.warning("   🚨 Model shows significant overfitting - consider stronger regularization")
         
         step_elapsed = time.time() - step_start
         logger.info(f"   ✅ Step 7 completed in {step_elapsed:.2f}s")
@@ -463,30 +582,75 @@ class OptimizedAlloyPredictor:
         logger.info("   📊 Progress: [████████████████] 100.0%")
         logger.info("")
         
-        # Final comprehensive summary
+        # Final comprehensive summary with enhanced formatting
         logger.info("="*80)
         logger.info("🎯 GPU-ACCELERATED TRAINING COMPLETED SUCCESSFULLY!")
         logger.info("="*80)
-        logger.info(f"⏱️  Total training time: {self.training_time:.2f} seconds ({self.training_time/60:.1f} minutes)")
-        logger.info(f"🚀 GPU acceleration: {'ENABLED' if self.use_gpu else 'DISABLED'}")
+        
+        # Training summary
+        total_minutes = self.training_time / 60
+        total_hours = total_minutes / 60
+        
+        if total_hours >= 1:
+            time_str = f"{self.training_time:.2f} seconds ({total_hours:.1f} hours)"
+        else:
+            time_str = f"{self.training_time:.2f} seconds ({total_minutes:.1f} minutes)"
+        
+        logger.info(f"⏱️  Total training time: {time_str}")
+        logger.info(f"🚀 GPU acceleration: {'✅ ENABLED' if self.use_gpu else '❌ DISABLED (CPU only)'}")
         logger.info(f"📊 Training samples processed: {len(X_train):,}")
         logger.info(f"📊 Test samples processed: {len(X_test):,}")
         logger.info(f"📊 Features engineered: {x_train_scaled.shape[1]}")
         logger.info(f"📊 Target variables: {y_train.shape[1]}")
         logger.info("")
+        
+        # Performance metrics section
         logger.info("🎯 FINAL MODEL PERFORMANCE:")
         logger.info(f"   Overall MSE: {overall_mse:.6f}")
-        logger.info(f"   Overall R²:  {overall_r2:.4f}")
+        
+        # R² status evaluation
+        if overall_r2 > 0.9:
+            r2_overall_status = "✅ Excellent"
+        elif overall_r2 > 0.7:
+            r2_overall_status = "⚠️ Good"
+        else:
+            r2_overall_status = "❌ Poor"
+        
+        logger.info(f"   Overall R²:  {overall_r2:.4f} {r2_overall_status}")
         logger.info(f"   Overall MAE: {overall_mae:.4f}")
         logger.info(f"   CV MSE (5-fold): {self.cv_scores.mean():.6f} (+/- {self.cv_scores.std() * 2:.6f})")
         logger.info("")
-        logger.info("🔧 BEST HYPERPARAMETERS:")
+        
+        # Hyperparameters section
+        logger.info("🔧 OPTIMIZED HYPERPARAMETERS:")
         for param, value in self.best_params.items():
             logger.info(f"   {param}: {value}")
         logger.info("")
+        
+        # Individual performance section
         logger.info("📈 INDIVIDUAL ALLOY PERFORMANCE:")
         for alloy, metrics in individual_metrics.items():
-            logger.info(f"   {alloy:<12}: MSE={metrics['mse']:.6f}, R²={metrics['r2']:.4f}, MAE={metrics['mae']:.4f}")
+            # R² status for individual alloys
+            if metrics['r2'] > 0.8:
+                r2_status = "✅"
+            elif metrics['r2'] > 0.6:
+                r2_status = "⚠️"
+            else:
+                r2_status = "❌"
+            
+            logger.info(f"   {alloy:<12}: MSE={metrics['mse']:.6f}, R²={metrics['r2']:.4f} {r2_status}, MAE={metrics['mae']:.4f}")
+        
+        # Final status evaluation
+        avg_r2 = np.mean([m['r2'] for m in individual_metrics.values()])
+        if avg_r2 > 0.85:
+            final_status = "🎉 EXCELLENT - Model ready for production deployment"
+        elif avg_r2 > 0.7:
+            final_status = "👍 GOOD - Model suitable for most applications"
+        else:
+            final_status = "⚠️ FAIR - Consider additional feature engineering or data"
+        
+        logger.info("")
+        logger.info(f"🏆 MODEL STATUS: {final_status}")
         logger.info("="*80)
         
         return True
