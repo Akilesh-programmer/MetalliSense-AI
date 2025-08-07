@@ -14,7 +14,12 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Tuple, Callable, Optional, Union
 import warnings
-warnings.filterwarnings('ignore')
+
+# Filter out specific XGBoost warnings about device mismatches
+warnings.filterwarnings('ignore', message=".*Falling back to prediction using DMatrix due to mismatched devices.*")
+# Filter out other common warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
 
 # ML libraries
 from sklearn.model_selection import (
@@ -240,6 +245,9 @@ class EnhancedMLTrainer:
             
             # Fit with validation set
             logger.info("🏋️ Training final model with early stopping...")
+            
+            # For XGBoost models with early stopping, we'll use the original data
+            # as the DMatrix conversion doesn't work well with the eval_set parameter
             early_stopping_model.fit(
                 X_train_part, y_train_part,
                 eval_set=[(X_valid, y_valid)]
@@ -255,11 +263,15 @@ class EnhancedMLTrainer:
         # Evaluate model
         logger.info("📈 Evaluating model performance...")
         eval_start = time.time()
-        y_pred = model.predict(X_test_scaled)
+        
+        # Ensure data is on the right device for prediction
+        X_test_device_ready = self._ensure_device_compatibility(model, X_test_scaled)
+        y_pred = model.predict(X_test_device_ready)
         accuracy = accuracy_score(y_test, y_pred)
         
         # Get top-3 accuracy
         if hasattr(model, 'predict_proba'):
+            # For predict_proba, we don't use DMatrix conversion
             y_proba = model.predict_proba(X_test_scaled)
             top3_acc = self._calculate_top_k_accuracy(y_test, y_proba, k=3)
             top5_acc = self._calculate_top_k_accuracy(y_test, y_proba, k=5)
@@ -347,7 +359,8 @@ class EnhancedMLTrainer:
         # Evaluate
         logger.info("📈 [Step 6/6] Evaluating regression performance...")
         eval_start = time.time()
-        y_pred = model.predict(X_test_scaled)
+        X_test_device_ready = self._ensure_device_compatibility(model, X_test_scaled)
+        y_pred = model.predict(X_test_device_ready)
         mse = mean_squared_error(y_test, y_pred)
         r2 = r2_score(y_test, y_pred)
         mae = mean_absolute_error(y_test, y_pred)
@@ -422,7 +435,8 @@ class EnhancedMLTrainer:
         # Evaluate
         logger.info("📈 Evaluating confidence estimation performance...")
         eval_start = time.time()
-        y_pred = model.predict(X_test_scaled)
+        X_test_device_ready = self._ensure_device_compatibility(model, X_test_scaled)
+        y_pred = model.predict(X_test_device_ready)
         mse = mean_squared_error(y_test, y_pred)
         r2 = r2_score(y_test, y_pred)
         eval_elapsed = time.time() - eval_start
@@ -496,7 +510,8 @@ class EnhancedMLTrainer:
         # Evaluate
         logger.info("📈 Evaluating success prediction performance...")
         eval_start = time.time()
-        y_pred = model.predict(X_test_scaled)
+        X_test_device_ready = self._ensure_device_compatibility(model, X_test_scaled)
+        y_pred = model.predict(X_test_device_ready)
         accuracy = accuracy_score(y_test, y_pred)
         eval_elapsed = time.time() - eval_start
         
@@ -1377,6 +1392,48 @@ class EnhancedMLTrainer:
         
         return final_model
     
+    def _ensure_device_compatibility(self, model, X, for_predict_proba=False):
+        """Ensure data is on the correct device for model inference to avoid warnings.
+        
+        This method helps avoid the "mismatched devices" warning from XGBoost when a model 
+        is trained on GPU but predictions are made with data on CPU. It attempts to convert
+        data to an XGBoost DMatrix when appropriate.
+        
+        Args:
+            model: The model to check for device compatibility
+            X: The input data for prediction
+            for_predict_proba: If True, skip conversion as predict_proba doesn't work with DMatrix
+            
+        Returns:
+            The input data, possibly converted to a format compatible with the model's device
+        """
+        # Skip conversion for predict_proba as it doesn't work with DMatrix
+        if for_predict_proba:
+            return X
+            
+        # Check if it's an XGBoost model and we're using GPU
+        if self.use_gpu and hasattr(model, 'get_params') and 'device' in model.get_params() and model.get_params()['device'] == 'cuda':
+            try:
+                # Create DMatrix for XGBoost models to handle device compatibility
+                if isinstance(X, xgb.DMatrix):
+                    return X
+                
+                # Get data array
+                if hasattr(X, 'values'):  # For pandas DataFrame
+                    x_values = X.values
+                else:
+                    x_values = X
+                
+                # Create DMatrix
+                return xgb.DMatrix(x_values)
+            except Exception as e:
+                logger.warning(f"⚠️ Warning: Could not convert data for GPU compatibility: {e}")
+                # If conversion fails, return original data
+                return X
+        
+        # For non-XGBoost models or CPU XGBoost, return the original data
+        return X
+        
     def save_models(self, models_dir: str):
         """Save all trained models and scalers"""
         logger.info("💾 Starting model saving process...")
