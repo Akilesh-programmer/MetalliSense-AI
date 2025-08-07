@@ -11,7 +11,6 @@ import os
 import sys
 import json
 import time
-import types
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Tuple, Callable, Optional, Union
 import warnings
@@ -599,33 +598,26 @@ class EnhancedMLTrainer:
                                    f"Current best: {current_best:.4f} - "
                                    f"Elapsed: {elapsed_str}, ETA: {eta_str}")
             
-            # Create callback
-            callback = VerboseCallback(None, opt_start)
-            
-            # Create and run randomized search with callback
+            # Create and run randomized search
             logger.info(f"🔍 Starting RandomizedSearchCV with 50 iterations...")
             search = RandomizedSearchCV(
                 model, param_dist, n_iter=50, cv=cv,
                 scoring='accuracy', random_state=42, 
-                n_jobs=-1, verbose=0  # Turn off built-in verbosity
+                n_jobs=-1, verbose=1  # Use minimal built-in verbosity
             )
             
-            # Set callback reference to search
-            callback.estimator = search
+            # Create a callback to periodically report progress
+            total_iters = 50
+            last_update_time = time.time()
             
-            # Monkey patch the fit method to call our callback
-            original_fit = search._fit
-            
-            def verbose_fit(self, X, y, groups=None, **fit_params):
-                result = original_fit(X, y, groups, **fit_params)
-                callback()
-                return result
-            
-            search._fit = types.MethodType(verbose_fit, search)
+            # Instead of monkey patching, we'll just log before and after
+            logger.info(f"⏱️ Starting hyperparameter search with {total_iters} iterations...")
+            start_time = time.time()
             
             # Fit the model
             search.fit(X, y)
-            opt_elapsed = time.time() - opt_start
+            end_time = time.time()
+            opt_elapsed = end_time - opt_start
             
             logger.info(f"✅ RandomizedSearchCV completed in {opt_elapsed:.2f}s")
             logger.info(f"🏆 Best accuracy: {search.best_score_:.4f}")
@@ -871,58 +863,13 @@ class EnhancedMLTrainer:
                 verbose=True
             )
             
-            # Create verbose callback for RandomizedSearchCV
-            class VerboseCallback:
-                def __init__(self, n_iter=50):
-                    self.n_iter = n_iter
-                    self.current_iter = 0
-                    self.best_score = -np.inf
-                    self.start_time = time.time()
-                    self.last_status_time = time.time()
-                
-                def __call__(self, cv_results):
-                    self.current_iter += 1
-                    
-                    current_best_idx = np.argmax(cv_results['mean_test_score'])
-                    current_best_score = cv_results['mean_test_score'][current_best_idx]
-                    
-                    # Calculate progress and time estimates
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    elapsed_str = str(timedelta(seconds=int(elapsed)))
-                    
-                    # Calculate ETA
-                    avg_time_per_iter = elapsed / self.current_iter
-                    remaining_iters = self.n_iter - self.current_iter
-                    eta = avg_time_per_iter * remaining_iters
-                    eta_str = str(timedelta(seconds=int(eta)))
-                    
-                    # Calculate progress percentage
-                    progress = (self.current_iter / self.n_iter) * 100
-                    
-                    if current_best_score > self.best_score:
-                        self.best_score = current_best_score
-                        params = cv_results['params'][current_best_idx]
-                        logger.info(f"🚀 Iteration {self.current_iter}/{self.n_iter} ({progress:.1f}%): "
-                                   f"New best R² score: {current_best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str} - "
-                                   f"n_est={params.get('n_estimators')}, "
-                                   f"depth={params.get('max_depth')}")
-                    elif (current_time - self.last_status_time) > 60:  # Log status every 60 seconds
-                        self.last_status_time = current_time
-                        logger.info(f"⏱️ Iteration {self.current_iter}/{self.n_iter} ({progress:.1f}%): "
-                                   f"Current best R²: {self.best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-            
-            callback = VerboseCallback(n_iter=50)
-            
-            logger.info(f"🔍 Running RandomizedSearchCV with 50 iterations...")
+            logger.info(f" Running RandomizedSearchCV with 50 iterations...")
             search = RandomizedSearchCV(
                 model, param_dist, n_iter=50, cv=3,
-                scoring='r2', random_state=42, n_jobs=-1, verbose=0,
-                callback=callback
+                scoring='r2', random_state=42, n_jobs=-1, verbose=1
             )
             
+            start_time_search = time.time()
             search.fit(X, y)
             opt_elapsed = time.time() - opt_start
             
