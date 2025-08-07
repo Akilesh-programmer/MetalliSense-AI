@@ -70,7 +70,8 @@ class EnhancedMLTrainer:
                 test_X = [[1, 2], [3, 4]]
                 test_y = [0, 1]
                 test_model = xgb.XGBClassifier(
-                    tree_method='gpu_hist', 
+                    tree_method='hist', 
+                    device='cuda',
                     n_estimators=1,
                     max_depth=1,
                     objective='binary:logistic'
@@ -233,8 +234,7 @@ class EnhancedMLTrainer:
             params = model.get_params()
             params.update({
                 'early_stopping_rounds': 10,
-                'eval_metric': 'merror',
-                'verbose': True
+                'eval_metric': 'merror'
             })
             early_stopping_model = xgb.XGBClassifier(**params)
             
@@ -242,8 +242,7 @@ class EnhancedMLTrainer:
             logger.info("🏋️ Training final model with early stopping...")
             early_stopping_model.fit(
                 X_train_part, y_train_part,
-                eval_set=[(X_valid, y_valid)],
-                verbose=True
+                eval_set=[(X_valid, y_valid)]
             )
             model = early_stopping_model
         else:
@@ -542,11 +541,9 @@ class EnhancedMLTrainer:
             cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
             
             model = xgb.XGBClassifier(
-                tree_method='gpu_hist' if self.use_gpu else 'hist',
-                random_state=42,
-                early_stopping_rounds=10,
-                eval_metric='merror',
-                verbose=True
+                tree_method='hist',
+                device='cuda' if self.use_gpu else 'cpu',
+                random_state=42
             )
             
             # Create verbose callback for RandomizedSearchCV
@@ -655,7 +652,8 @@ class EnhancedMLTrainer:
                 iteration_count += 1
                 
                 model = xgb.XGBClassifier(
-                    tree_method='gpu_hist' if self.use_gpu else 'hist',
+                    tree_method='hist',
+                    device='cuda' if self.use_gpu else 'cpu',
                     random_state=42,
                     n_jobs=-1,
                     **params
@@ -699,7 +697,8 @@ class EnhancedMLTrainer:
             # Create best model
             best_params = dict(zip([dim.name for dim in dimensions], result.x))
             final_model = xgb.XGBClassifier(
-                tree_method='gpu_hist' if self.use_gpu else 'hist',
+                tree_method='hist',
+                device='cuda' if self.use_gpu else 'cpu',
                 random_state=42,
                 n_jobs=-1,
                 **best_params
@@ -735,7 +734,8 @@ class EnhancedMLTrainer:
                     'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
                     'reg_alpha': trial.suggest_float('reg_alpha', 1e-9, 1.0, log=True),
                     'reg_lambda': trial.suggest_float('reg_lambda', 1e-9, 1.0, log=True),
-                    'tree_method': 'gpu_hist' if self.use_gpu else 'hist',
+                    'tree_method': 'hist',
+                    'device': 'cuda' if self.use_gpu else 'cpu',
                     'random_state': 42
                 }
                 
@@ -778,7 +778,8 @@ class EnhancedMLTrainer:
             
             best_params = study.best_params
             best_params.update({
-                'tree_method': 'gpu_hist' if self.use_gpu else 'hist',
+                'tree_method': 'hist',
+                'device': 'cuda' if self.use_gpu else 'cpu',
                 'random_state': 42
             })
             
@@ -800,7 +801,8 @@ class EnhancedMLTrainer:
             }
             
             model = xgb.XGBClassifier(
-                tree_method='gpu_hist' if self.use_gpu else 'hist',
+                tree_method='hist',
+                device='cuda' if self.use_gpu else 'cpu',
                 random_state=42
             )
             
@@ -855,21 +857,18 @@ class EnhancedMLTrainer:
             }
             
             model = xgb.XGBRegressor(
-                tree_method='gpu_hist' if self.use_gpu else 'hist',
+                tree_method='hist',
+                device='cuda' if self.use_gpu else 'cpu',
                 objective='reg:squarederror',
-                random_state=42,
-                early_stopping_rounds=10,
-                eval_metric='rmse',
-                verbose=True
+                random_state=42
             )
             
-            logger.info(f" Running RandomizedSearchCV with 50 iterations...")
+            logger.info("🔍 Running RandomizedSearchCV with 50 iterations...")
             search = RandomizedSearchCV(
                 model, param_dist, n_iter=50, cv=3,
                 scoring='r2', random_state=42, n_jobs=-1, verbose=1
             )
             
-            start_time_search = time.time()
             search.fit(X, y)
             opt_elapsed = time.time() - opt_start
             
@@ -894,7 +893,8 @@ class EnhancedMLTrainer:
             }
             
             model = xgb.XGBRegressor(
-                tree_method='gpu_hist' if self.use_gpu else 'hist',
+                tree_method='hist',
+                device='cuda' if self.use_gpu else 'cpu',
                 objective='reg:squarederror',
                 random_state=42,
                 n_jobs=-1
@@ -978,7 +978,8 @@ class EnhancedMLTrainer:
             }
             
             model = xgb.XGBRegressor(
-                tree_method='gpu_hist' if self.use_gpu else 'hist',
+                tree_method='hist',
+                device='cuda' if self.use_gpu else 'cpu',
                 objective='reg:squarederror',
                 random_state=42
             )
