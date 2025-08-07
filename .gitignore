@@ -1,1 +1,87 @@
+# IDE and Editor files
 .qodo
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+venv
+env/
+ENV/
+.venv
+.env
+ai-model-service/venv/
+**/venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# Temporary and refactored files
+*_refactored.*
+update_git_tracking.*
+cleanup.*
+ai-model-service/cleanup.*
+ai-model-service/demo.py
+ai-model-service/test_service.py
+*_updated.*
+
+# Machine Learning model files
+*.joblib
+*.h5
+*.model
+models/trained/*.pkl
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+logs/
+ai-model-service/logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+*.bak
+TODO
+.env.example
