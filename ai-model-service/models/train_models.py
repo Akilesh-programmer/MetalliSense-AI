@@ -20,11 +20,7 @@ from sklearn.metrics import accuracy_score, mean_squared_error
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.mongo_client import MongoDBClient
-from models.enhanced_ml_models import (
-    train_enhanced_grade_classifier, 
-    train_enhanced_composition_predictor,
-    train_enhanced_confidence_estimator,
-    train_enhanced_success_predictor,
+from models.ml_models import (
     EnhancedMLTrainer
 )
 from config import MONGODB_CONNECTION_STRING, MONGODB_DATABASE_NAME
