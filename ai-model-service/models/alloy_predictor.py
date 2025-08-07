@@ -1,7 +1,7 @@
 """
-Optimized Alloy Recommendation Engine for MetalliSense
-Single-purpose ML model for alloy quantity prediction
-Uses XGBoost with GPU acceleration and overfitting prevention
+Enhanced MetalliSense AI - Advanced Alloy Prediction System
+Features comprehensive data preprocessing, multi-model ensemble architecture,
+and advanced metallurgical feature engineering for superior performance
 """
 
 import pandas as pd
@@ -12,11 +12,12 @@ import os
 import sys
 import time
 from datetime import datetime
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Dict, List, Any, Tuple, Optional, Union
 import warnings
-
+import json
+from scipy import stats
 from sklearn.model_selection import train_test_split, cross_val_score, KFold, GridSearchCV, RandomizedSearchCV
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler, LabelEncoder, RobustScaler, MinMaxScaler
 from sklearn.metrics import (
     mean_squared_error, r2_score, mean_absolute_error, 
     accuracy_score, classification_report, confusion_matrix,
@@ -24,7 +25,10 @@ from sklearn.metrics import (
     median_absolute_error, mean_squared_log_error
 )
 from sklearn.multioutput import MultiOutputRegressor
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, VotingRegressor
+from sklearn.linear_model import ElasticNet, Ridge
+from sklearn.feature_selection import SelectFromModel
+from sklearn.decomposition import PCA
 
 # XGBoost with GPU support
 import xgboost as xgb
@@ -94,6 +98,419 @@ def print_progress_bar(iteration, total, prefix='Progress', suffix='Complete',
     print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='', flush=True)
     if iteration == total:
         print()  # New line when complete
+
+class AdvancedDataPreprocessor:
+    """
+    Advanced data preprocessing pipeline for metallurgical data with comprehensive
+    outlier handling, feature engineering, and data quality improvement
+    """
+    
+    def __init__(self, outlier_method='iqr', log_transform=True):
+        self.outlier_method = outlier_method
+        self.log_transform = log_transform
+        self.outlier_bounds = {}
+        self.feature_stats = {}
+        self.synthetic_data_ratio = 0.15
+        
+    def detect_outliers(self, data: pd.Series, method='iqr') -> Tuple[np.ndarray, Dict]:
+        """Detect outliers using IQR or Z-score methods"""
+        if method == 'iqr':
+            Q1 = data.quantile(0.25)
+            Q3 = data.quantile(0.75)
+            IQR = Q3 - Q1
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+            outliers = (data < lower_bound) | (data > upper_bound)
+            bounds = {'lower': lower_bound, 'upper': upper_bound}
+        else:  # z-score
+            z_scores = np.abs(stats.zscore(data.dropna()))
+            outliers = z_scores > 3
+            bounds = {'lower': data.mean() - 3*data.std(), 'upper': data.mean() + 3*data.std()}
+        
+        return outliers, bounds
+    
+    def handle_outliers(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+        """Handle outliers by capping to reasonable bounds"""
+        df_processed = df.copy()
+        
+        for col in columns:
+            if col in df.columns:
+                outliers, bounds = self.detect_outliers(df[col], self.outlier_method)
+                self.outlier_bounds[col] = bounds
+                
+                # Cap outliers instead of removing them
+                df_processed.loc[df_processed[col] < bounds['lower'], col] = bounds['lower']
+                df_processed.loc[df_processed[col] > bounds['upper'], col] = bounds['upper']
+                
+                logger.info(f"   🔧 {col}: Capped {outliers.sum()} outliers to [{bounds['lower']:.3f}, {bounds['upper']:.3f}]")
+        
+        return df_processed
+    
+    def apply_log_transformation(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+        """Apply log transformation to skewed data"""
+        df_processed = df.copy()
+        
+        for col in columns:
+            if col in df.columns and df[col].min() >= 0:
+                # Add small constant to handle zeros
+                df_processed[col] = np.log1p(df[col])
+                logger.info(f"   📊 Applied log transformation to {col}")
+        
+        return df_processed
+    
+    def generate_synthetic_data(self, df: pd.DataFrame, target_alloys: List[str], n_synthetic: int) -> pd.DataFrame:
+        """Generate synthetic data for data augmentation"""
+        synthetic_rows = []
+        
+        for _ in range(n_synthetic):
+            # Sample a base row
+            base_idx = np.random.randint(0, len(df))
+            base_row = df.iloc[base_idx].copy()
+            
+            # Add controlled noise to chemical composition
+            chemical_elements = ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']
+            for element in chemical_elements:
+                current_col = f'current_{element}'
+                if current_col in base_row.index:
+                    # Add ±5% noise
+                    noise_factor = np.random.uniform(0.95, 1.05)
+                    base_row[current_col] *= noise_factor
+            
+            # Adjust alloy quantities proportionally
+            for alloy in target_alloys:
+                alloy_col = f'alloy_{alloy}_kg'
+                if alloy_col in base_row.index:
+                    noise_factor = np.random.uniform(0.9, 1.1)
+                    base_row[alloy_col] *= noise_factor
+            
+            synthetic_rows.append(base_row)
+        
+        synthetic_df = pd.DataFrame(synthetic_rows)
+        logger.info(f"   🔄 Generated {n_synthetic} synthetic samples")
+        
+        return pd.concat([df, synthetic_df], ignore_index=True)
+    
+    def engineer_metallurgical_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Engineer advanced metallurgical features"""
+        df_enhanced = df.copy()
+        
+        # Steel type classification
+        df_enhanced['is_stainless'] = (df_enhanced.get('current_Cr', 0) > 10.5).astype(int)
+        df_enhanced['is_carbon_steel'] = ((df_enhanced.get('current_C', 0) > 0.3) & 
+                                         (df_enhanced.get('current_Cr', 0) < 2)).astype(int)
+        df_enhanced['is_alloy_steel'] = ((df_enhanced.get('current_Cr', 0) >= 2) & 
+                                        (df_enhanced.get('current_Cr', 0) <= 10.5)).astype(int)
+        
+        # Important element ratios
+        df_enhanced['Cr_Ni_ratio'] = np.where(df_enhanced.get('current_Ni', 0) > 0,
+                                             df_enhanced.get('current_Cr', 0) / df_enhanced.get('current_Ni', 1e-6),
+                                             0)
+        df_enhanced['C_Cr_ratio'] = np.where(df_enhanced.get('current_Cr', 0) > 0,
+                                            df_enhanced.get('current_C', 0) / df_enhanced.get('current_Cr', 1e-6),
+                                            0)
+        df_enhanced['Mo_Ni_ratio'] = np.where(df_enhanced.get('current_Ni', 0) > 0,
+                                             df_enhanced.get('current_Mo', 0) / df_enhanced.get('current_Ni', 1e-6),
+                                             0)
+        
+        # Metallurgical indices
+        # Hardenability index (simplified)
+        df_enhanced['hardenability_index'] = (df_enhanced.get('current_C', 0) * 100 +
+                                             df_enhanced.get('current_Mn', 0) * 20 +
+                                             df_enhanced.get('current_Cr', 0) * 15 +
+                                             df_enhanced.get('current_Mo', 0) * 30)
+        
+        # Corrosion resistance index
+        df_enhanced['corrosion_resistance'] = (df_enhanced.get('current_Cr', 0) +
+                                              df_enhanced.get('current_Ni', 0) * 0.7 +
+                                              df_enhanced.get('current_Mo', 0) * 3)
+        
+        # Total alloying content
+        alloying_elements = ['Cr', 'Mo', 'Ni', 'Cu']
+        df_enhanced['total_alloying'] = sum(df_enhanced.get(f'current_{elem}', 0) for elem in alloying_elements)
+        
+        # Grade complexity (number of significant alloying elements)
+        df_enhanced['grade_complexity'] = sum((df_enhanced.get(f'current_{elem}', 0) > 0.1).astype(int) 
+                                             for elem in alloying_elements)
+        
+        logger.info(f"   🔬 Engineered 8 advanced metallurgical features")
+        
+        return df_enhanced
+    
+    def preprocess_complete(self, df: pd.DataFrame, target_alloys: List[str]) -> Tuple[pd.DataFrame, Dict]:
+        """Complete preprocessing pipeline"""
+        logger.info("🔧 Starting advanced data preprocessing...")
+        
+        preprocessing_report = {
+            'original_shape': df.shape,
+            'steps_applied': [],
+            'outliers_handled': {},
+            'features_engineered': [],
+            'data_quality_score': 0.0
+        }
+        
+        # Step 1: Handle missing values
+        missing_before = df.isnull().sum().sum()
+        df_processed = df.fillna(df.median(numeric_only=True))
+        missing_after = df_processed.isnull().sum().sum()
+        preprocessing_report['steps_applied'].append(f'Missing values: {missing_before} -> {missing_after}')
+        
+        # Step 2: Handle outliers in chemical composition and alloy quantities
+        chemical_cols = [f'current_{elem}' for elem in ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']]
+        alloy_cols = [f'alloy_{alloy}_kg' for alloy in target_alloys]
+        outlier_cols = chemical_cols + alloy_cols
+        
+        df_processed = self.handle_outliers(df_processed, outlier_cols)
+        preprocessing_report['steps_applied'].append('Outlier handling: IQR-based capping')
+        
+        # Step 3: Log transformation for skewed data
+        if self.log_transform:
+            df_processed = self.apply_log_transformation(df_processed, alloy_cols)
+            preprocessing_report['steps_applied'].append('Log transformation: Applied to alloy quantities')
+        
+        # Step 4: Engineer metallurgical features
+        df_processed = self.engineer_metallurgical_features(df_processed)
+        preprocessing_report['features_engineered'] = [
+            'is_stainless', 'is_carbon_steel', 'is_alloy_steel',
+            'Cr_Ni_ratio', 'C_Cr_ratio', 'Mo_Ni_ratio',
+            'hardenability_index', 'corrosion_resistance',
+            'total_alloying', 'grade_complexity'
+        ]
+        preprocessing_report['steps_applied'].append('Metallurgical features: 8 advanced features')
+        
+        # Step 5: Generate synthetic data for augmentation
+        n_synthetic = int(len(df_processed) * self.synthetic_data_ratio)
+        if n_synthetic > 0:
+            df_processed = self.generate_synthetic_data(df_processed, target_alloys, n_synthetic)
+            preprocessing_report['steps_applied'].append(f'Data augmentation: +{n_synthetic} synthetic samples')
+        
+        # Calculate data quality score
+        non_zero_targets = sum((df_processed[f'alloy_{alloy}_kg'] > 0).sum() for alloy in target_alloys)
+        total_targets = len(df_processed) * len(target_alloys)
+        preprocessing_report['data_quality_score'] = non_zero_targets / total_targets
+        
+        preprocessing_report['final_shape'] = df_processed.shape
+        
+        logger.info(f"✅ Preprocessing completed: {df.shape} -> {df_processed.shape}")
+        logger.info(f"📊 Data quality score: {preprocessing_report['data_quality_score']:.3f}")
+        
+        return df_processed, preprocessing_report
+
+
+class EnhancedAlloyPredictor:
+    """
+    Enhanced multi-model ensemble predictor with individual models per alloy type
+    and comprehensive evaluation framework
+    """
+    
+    def __init__(self, use_gpu=True, ensemble_method='voting'):
+        self.use_gpu = use_gpu
+        self.ensemble_method = ensemble_method
+        self.models = {}
+        self.scalers = {}
+        self.feature_selectors = {}
+        self.grade_encoder = LabelEncoder()
+        self.target_alloys = [
+            'chromium', 'nickel', 'molybdenum', 'copper', 
+            'aluminum', 'titanium', 'vanadium', 'niobium'
+        ]
+        self.training_history = {}
+        
+    def create_model_for_alloy(self, alloy: str) -> VotingRegressor:
+        """Create optimized ensemble model for specific alloy"""
+        
+        # XGBoost with alloy-specific parameters
+        xgb_params = {
+            'objective': 'reg:squarederror',
+            'random_state': 42,
+            'n_jobs': -1 if not self.use_gpu else 1,
+            'verbosity': 0
+        }
+        
+        if self.use_gpu:
+            xgb_params.update({
+                'tree_method': 'gpu_hist',
+                'gpu_id': 0,
+                'predictor': 'gpu_predictor'
+            })
+        
+        # Alloy-specific hyperparameters
+        alloy_specific_params = {
+            'chromium': {'n_estimators': 300, 'max_depth': 6, 'learning_rate': 0.1},
+            'nickel': {'n_estimators': 400, 'max_depth': 7, 'learning_rate': 0.08},
+            'molybdenum': {'n_estimators': 250, 'max_depth': 5, 'learning_rate': 0.12},
+            'copper': {'n_estimators': 350, 'max_depth': 6, 'learning_rate': 0.09},
+            'aluminum': {'n_estimators': 200, 'max_depth': 5, 'learning_rate': 0.15},
+            'titanium': {'n_estimators': 300, 'max_depth': 7, 'learning_rate': 0.1},
+            'vanadium': {'n_estimators': 250, 'max_depth': 5, 'learning_rate': 0.12},
+            'niobium': {'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.15}
+        }
+        
+        xgb_params.update(alloy_specific_params.get(alloy, {}))
+        
+        # Create ensemble models
+        xgb_model = xgb.XGBRegressor(**xgb_params)
+        rf_model = RandomForestRegressor(n_estimators=200, max_depth=8, random_state=42, n_jobs=-1)
+        elastic_model = ElasticNet(alpha=0.1, l1_ratio=0.5, random_state=42)
+        ridge_model = Ridge(alpha=1.0, random_state=42)
+        
+        # Create voting ensemble
+        ensemble = VotingRegressor([
+            ('xgb', xgb_model),
+            ('rf', rf_model),
+            ('elastic', elastic_model),
+            ('ridge', ridge_model)
+        ])
+        
+        return ensemble
+    
+    def train(self, X: np.ndarray, y: np.ndarray, feature_names: List[str]) -> Dict:
+        """Train individual models for each alloy"""
+        logger.info("🚀 Training Enhanced Multi-Model Architecture...")
+        
+        training_results = {}
+        
+        for i, alloy in enumerate(self.target_alloys):
+            if i >= y.shape[1]:
+                continue
+                
+            logger.info(f"   🔧 Training model for {alloy}...")
+            
+            # Get target for this alloy
+            y_alloy = y[:, i]
+            
+            # Feature selection for this alloy
+            selector = SelectFromModel(RandomForestRegressor(n_estimators=50, random_state=42))
+            X_selected = selector.fit_transform(X, y_alloy)
+            self.feature_selectors[alloy] = selector
+            
+            # Scaling for this alloy
+            scaler = RobustScaler()
+            X_scaled = scaler.fit_transform(X_selected)
+            self.scalers[alloy] = scaler
+            
+            # Create and train ensemble model
+            model = self.create_model_for_alloy(alloy)
+            
+            # Split for validation
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_scaled, y_alloy, test_size=0.2, random_state=42
+            )
+            
+            # Train model
+            model.fit(X_train, y_train)
+            self.models[alloy] = model
+            
+            # Evaluate
+            train_pred = model.predict(X_train)
+            val_pred = model.predict(X_val)
+            
+            train_r2 = r2_score(y_train, train_pred)
+            val_r2 = r2_score(y_val, val_pred)
+            train_mse = mean_squared_error(y_train, train_pred)
+            val_mse = mean_squared_error(y_val, val_pred)
+            
+            training_results[alloy] = {
+                'train_r2': train_r2,
+                'val_r2': val_r2,
+                'train_mse': train_mse,
+                'val_mse': val_mse,
+                'n_features': X_selected.shape[1],
+                'overfitting_ratio': train_mse / val_mse if val_mse > 0 else 1.0
+            }
+            
+            logger.info(f"     📊 {alloy}: R²={val_r2:.4f}, MSE={val_mse:.2f}, Features={X_selected.shape[1]}")
+        
+        self.training_history = training_results
+        return training_results
+    
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """Make predictions using ensemble models"""
+        predictions = []
+        
+        for alloy in self.target_alloys:
+            if alloy in self.models:
+                # Apply same preprocessing as training
+                X_selected = self.feature_selectors[alloy].transform(X)
+                X_scaled = self.scalers[alloy].transform(X_selected)
+                pred = self.models[alloy].predict(X_scaled)
+                predictions.append(pred)
+            else:
+                predictions.append(np.zeros(X.shape[0]))
+        
+        return np.column_stack(predictions)
+    
+    def evaluate_comprehensive(self, X_test: np.ndarray, y_test: np.ndarray, 
+                             feature_names: List[str]) -> Dict:
+        """Comprehensive evaluation of the enhanced model"""
+        logger.info("📊 Performing comprehensive evaluation...")
+        
+        predictions = self.predict(X_test)
+        
+        # Overall metrics
+        overall_r2 = r2_score(y_test, predictions)
+        overall_mse = mean_squared_error(y_test, predictions)
+        overall_mae = mean_absolute_error(y_test, predictions)
+        
+        # Individual alloy metrics
+        individual_metrics = {}
+        for i, alloy in enumerate(self.target_alloys):
+            if i < y_test.shape[1]:
+                y_true_alloy = y_test[:, i]
+                y_pred_alloy = predictions[:, i]
+                
+                individual_metrics[alloy] = {
+                    'r2': r2_score(y_true_alloy, y_pred_alloy),
+                    'mse': mean_squared_error(y_true_alloy, y_pred_alloy),
+                    'mae': mean_absolute_error(y_true_alloy, y_pred_alloy),
+                    'rmse': np.sqrt(mean_squared_error(y_true_alloy, y_pred_alloy))
+                }
+        
+        evaluation_results = {
+            'overall_metrics': {
+                'r2': overall_r2,
+                'mse': overall_mse,
+                'mae': overall_mae,
+                'rmse': np.sqrt(overall_mse)
+            },
+            'individual_metrics': individual_metrics,
+            'training_history': self.training_history,
+            'model_count': len(self.models),
+            'average_r2': np.mean([m['r2'] for m in individual_metrics.values()])
+        }
+        
+        logger.info(f"✅ Enhanced model evaluation completed")
+        logger.info(f"   📊 Overall R²: {overall_r2:.4f}")
+        logger.info(f"   📊 Average individual R²: {evaluation_results['average_r2']:.4f}")
+        
+        return evaluation_results
+    
+    def save_models(self, models_dir: str):
+        """Save all trained models and components"""
+        os.makedirs(models_dir, exist_ok=True)
+        
+        # Save individual models
+        for alloy, model in self.models.items():
+            model_path = os.path.join(models_dir, f"enhanced_{alloy}_model.pkl")
+            with open(model_path, 'wb') as f:
+                pickle.dump(model, f)
+        
+        # Save scalers
+        scalers_path = os.path.join(models_dir, "enhanced_scalers.pkl")
+        with open(scalers_path, 'wb') as f:
+            pickle.dump(self.scalers, f)
+        
+        # Save feature selectors
+        selectors_path = os.path.join(models_dir, "enhanced_feature_selectors.pkl")
+        with open(selectors_path, 'wb') as f:
+            pickle.dump(self.feature_selectors, f)
+        
+        # Save training history
+        history_path = os.path.join(models_dir, "enhanced_training_history.json")
+        with open(history_path, 'w') as f:
+            json.dump(self.training_history, f, indent=2)
+        
+        logger.info(f"💾 Enhanced models saved to {models_dir}")
+
 
 class OptimizedAlloyPredictor:
     """

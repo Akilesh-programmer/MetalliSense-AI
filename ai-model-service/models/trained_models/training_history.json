@@ -1,0 +1,66 @@
+{
+  "chromium": {
+    "train_r2": 0.46421352256882953,
+    "val_r2": 0.45710738887885016,
+    "train_mse": 2.8374595270519136,
+    "val_mse": 2.8704665589489595,
+    "n_features": 2,
+    "overfitting_ratio": 0.9885011613202239
+  },
+  "nickel": {
+    "train_r2": 0.5596223879745845,
+    "val_r2": 0.5437633137915823,
+    "train_mse": 2.786880753985797,
+    "val_mse": 2.883768204408096,
+    "n_features": 2,
+    "overfitting_ratio": 0.9664024832945317
+  },
+  "molybdenum": {
+    "train_r2": 0.42189125355333656,
+    "val_r2": 0.40520367720150663,
+    "train_mse": 3.7837276581701578,
+    "val_mse": 3.871521034454063,
+    "n_features": 3,
+    "overfitting_ratio": 0.9773232857312151
+  },
+  "copper": {
+    "train_r2": 0.15646874177738213,
+    "val_r2": 0.09698442304217847,
+    "train_mse": 2.856540564372923,
+    "val_mse": 3.0856662960135846,
+    "n_features": 11,
+    "overfitting_ratio": 0.9257451358441863
+  },
+  "aluminum": {
+    "train_r2": 1.0,
+    "val_r2": 1.0,
+    "train_mse": 0.0,
+    "val_mse": 0.0,
+    "n_features": 20,
+    "overfitting_ratio": 1.0
+  },
+  "titanium": {
+    "train_r2": 1.0,
+    "val_r2": 1.0,
+    "train_mse": 0.0,
+    "val_mse": 0.0,
+    "n_features": 20,
+    "overfitting_ratio": 1.0
+  },
+  "vanadium": {
+    "train_r2": 1.0,
+    "val_r2": 1.0,
+    "train_mse": 0.0,
+    "val_mse": 0.0,
+    "n_features": 20,
+    "overfitting_ratio": 1.0
+  },
+  "niobium": {
+    "train_r2": 1.0,
+    "val_r2": 1.0,
+    "train_mse": 0.0,
+    "val_mse": 0.0,
+    "n_features": 20,
+    "overfitting_ratio": 1.0
+  }
+}

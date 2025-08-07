@@ -1,7 +1,6 @@
 """
-Optimized training script for MetalliSense AI
-Uses OptimizedAlloyPredictor for alloy quantity prediction
-Loads data from MongoDB (no synthetic generation)
+Enhanced training script for MetalliSense AI
+Uses advanced preprocessing and enhanced model architecture
 """
 
 import sys
@@ -13,9 +12,10 @@ from datetime import datetime
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from alloy_predictor import OptimizedAlloyPredictor
+from alloy_predictor import OptimizedAlloyPredictor, AdvancedDataPreprocessor, EnhancedAlloyPredictor
 from database.mongo_client import MongoDBClient
 import pandas as pd
+import numpy as np
 
 # Setup logging
 logging.basicConfig(
@@ -197,10 +197,149 @@ def main():
         return False
 
 if __name__ == "__main__":
-    success = main()
-    if success:
-        logger.info("✅ Training pipeline completed successfully")
-        exit(0)
+    print("\n" + "="*60)
+    print("MetalliSense AI Training Options:")
+    print("1. Original Model (XGBoost Multi-output)")  
+    print("2. Enhanced Model (Multi-model architecture + advanced preprocessing)")
+    print("="*60)
+    
+    choice = input("Select training mode (1 or 2, default=1): ").strip()
+    
+    if choice == "2":
+        # Enhanced training pipeline
+        try:
+            logger.info("🚀 Starting Enhanced MetalliSense AI Training Pipeline...")
+            
+            # Create models directory
+            models_dir = create_models_directory()
+            
+            # Load training data
+            training_data = load_training_data_from_mongodb()
+            if training_data is None:
+                logger.error("❌ Failed to load training data")
+                exit(1)
+            
+            # Display data summary
+            display_training_summary(training_data)
+            
+            # Initialize advanced preprocessor
+            logger.info("🔧 Initializing advanced data preprocessor...")
+            preprocessor = AdvancedDataPreprocessor(
+                outlier_method='iqr',
+                log_transform=True
+            )
+            
+            # Apply comprehensive preprocessing
+            target_alloys = [
+                'chromium', 'nickel', 'molybdenum', 'copper', 
+                'aluminum', 'titanium', 'vanadium', 'niobium'
+            ]
+            
+            preprocessed_data, preprocessing_report = preprocessor.preprocess_complete(
+                training_data, target_alloys
+            )
+            
+            # Feature engineering for enhanced model
+            logger.info("🔧 Preparing features for enhanced model...")
+            
+            # Extract features and targets
+            chemical_elements = ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']
+            
+            # Features: chemical composition + engineered features
+            feature_cols = []
+            
+            # Current composition
+            for element in chemical_elements:
+                col = f'current_{element}'
+                if col in preprocessed_data.columns:
+                    feature_cols.append(col)
+            
+            # Engineered features from preprocessing
+            engineered_features = [
+                'is_stainless', 'is_carbon_steel', 'is_alloy_steel',
+                'Cr_Ni_ratio', 'C_Cr_ratio', 'Mo_Ni_ratio',
+                'hardenability_index', 'corrosion_resistance',
+                'total_alloying', 'grade_complexity'
+            ]
+            
+            for feat in engineered_features:
+                if feat in preprocessed_data.columns:
+                    feature_cols.append(feat)
+            
+            # Grade encoding (simple label encoding for now)
+            from sklearn.preprocessing import LabelEncoder
+            grade_encoder = LabelEncoder()
+            grade_encoded = grade_encoder.fit_transform(preprocessed_data['grade'].astype(str))
+            
+            # Combine features
+            X_features = preprocessed_data[feature_cols].values
+            X_grade = grade_encoded.reshape(-1, 1)
+            X = np.column_stack([X_features, X_grade])
+            
+            feature_names = feature_cols + ['grade_encoded']
+            
+            # Target variables
+            target_cols = [f'alloy_{alloy}_kg' for alloy in target_alloys]
+            y = preprocessed_data[target_cols].values
+            
+            logger.info(f"📊 Final feature matrix: {X.shape}")
+            logger.info(f"📊 Target matrix: {y.shape}")
+            logger.info(f"📊 Feature names: {len(feature_names)}")
+            
+            # Split data
+            from sklearn.model_selection import train_test_split
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42, shuffle=True
+            )
+            
+            logger.info(f"📊 Training samples: {X_train.shape[0]:,}")
+            logger.info(f"📊 Test samples: {X_test.shape[0]:,}")
+            
+            # Initialize and train enhanced model
+            logger.info("🚀 Initializing Enhanced Multi-Model Architecture...")
+            enhanced_model = EnhancedAlloyPredictor(
+                use_gpu=True,
+                ensemble_method='voting'
+            )
+            
+            # Train the enhanced model
+            training_start = time.time()
+            training_results = enhanced_model.train(X_train, y_train, feature_names)
+            training_time = time.time() - training_start
+            
+            logger.info(f"⏱️ Enhanced model training completed in {training_time:.1f} seconds")
+            
+            # Comprehensive evaluation
+            logger.info("📊 Performing comprehensive evaluation...")
+            evaluation_results = enhanced_model.evaluate_comprehensive(
+                X_test, y_test, feature_names
+            )
+            
+            # Save enhanced models
+            enhanced_model.save_models(models_dir)
+            
+            # Save preprocessing components
+            import pickle
+            preprocessor_file = os.path.join(models_dir, "advanced_preprocessor.pkl")
+            with open(preprocessor_file, 'wb') as f:
+                pickle.dump(preprocessor, f)
+            
+            grade_encoder_file = os.path.join(models_dir, "enhanced_grade_encoder.pkl")
+            with open(grade_encoder_file, 'wb') as f:
+                pickle.dump(grade_encoder, f)
+            
+            logger.info("✅ Enhanced training pipeline completed successfully!")
+            
+        except Exception as e:
+            logger.error(f"❌ Enhanced training failed: {e}")
+            exit(1)
     else:
-        logger.error("❌ Training pipeline failed")
+        # Original training pipeline
+        success = main()
+        if success:
+            logger.info("✅ Training pipeline completed successfully")
+            exit(0)
+        else:
+            logger.error("❌ Training pipeline failed")
+            exit(1)
         exit(1)
