@@ -219,6 +219,24 @@ class OptimizedAlloyPredictor:
         
         y = df[available_targets].values
         
+        # Add debugging information about data quality and suggest log transformation
+        logger.info(f"   📊 Feature statistics:")
+        logger.info(f"      X shape: {X.shape}")
+        logger.info(f"      X range: {X.min():.3f} to {X.max():.3f}")
+        logger.info(f"      X mean: {X.mean():.3f}")
+        logger.info(f"   📊 Target statistics:")
+        logger.info(f"      y shape: {y.shape}")
+        logger.info(f"      y range: {y.min():.3f} to {y.max():.3f}")
+        logger.info(f"      y mean: {y.mean():.3f}")
+        logger.info(f"      y std: {y.std():.3f}")
+        logger.info(f"      y max/mean ratio: {y.max()/y.mean():.1f}x")
+        logger.info(f"      Non-zero targets: {(y > 0).sum()}/{y.size} ({(y > 0).sum()/y.size*100:.1f}%)")
+        
+        # Check for extreme outliers
+        if y.max() / y.mean() > 100:
+            logger.warning(f"⚠️  Extreme outliers detected! Max value is {y.max()/y.mean():.1f}x the mean")
+            logger.warning("⚠️  Consider log transformation or outlier removal for better performance")
+        
         logger.info(f"✅ Feature engineering completed: {X.shape[1]} features, {y.shape[1]} targets")
         
         return X, y
@@ -361,17 +379,17 @@ class OptimizedAlloyPredictor:
         logger.info("   ⏱️  Estimated time: 15-25 minutes")
         logger.info("   📊 Progress: [██████████] 62.5%")
         
-        # Parameter grid for RandomizedSearchCV (faster initial search)
+        # Parameter grid for RandomizedSearchCV (less aggressive regularization)
         param_distributions = {
-            'n_estimators': [100, 200, 300, 500],
-            'max_depth': [3, 4, 5, 6, 7, 8],
-            'learning_rate': [0.01, 0.05, 0.1, 0.15, 0.2],
-            'subsample': [0.7, 0.8, 0.9, 1.0],
-            'colsample_bytree': [0.7, 0.8, 0.9, 1.0],
-            'min_child_weight': [1, 3, 5, 7],
-            'gamma': [0, 0.1, 0.2, 0.3],
-            'reg_alpha': [0, 0.1, 0.5, 1.0],
-            'reg_lambda': [1, 1.5, 2.0, 2.5]
+            'n_estimators': [200, 300, 500, 800],  # Increased estimators
+            'max_depth': [4, 5, 6, 7, 8],  # Removed very shallow trees
+            'learning_rate': [0.05, 0.1, 0.15, 0.2],  # Higher learning rates
+            'subsample': [0.8, 0.9, 1.0],
+            'colsample_bytree': [0.8, 0.9, 1.0],
+            'min_child_weight': [1, 3, 5],  # Less restrictive
+            'gamma': [0, 0.1, 0.2],  # Less regularization
+            'reg_alpha': [0, 0.1, 0.3],  # Reduced L1 regularization
+            'reg_lambda': [1, 1.2, 1.5]  # Reduced L2 regularization
         }
         
         # Create XGBoost regressor with MultiOutput wrapper
@@ -683,7 +701,11 @@ class OptimizedAlloyPredictor:
             overall_mae = mean_absolute_error(y_true, y_pred)
             overall_r2 = r2_score(y_true, y_pred)
             overall_explained_var = explained_variance_score(y_true, y_pred)
-            overall_max_error = max_error(y_true, y_pred)
+            # Calculate max_error for each target individually and take the maximum
+            max_errors = []
+            for i in range(y_true.shape[1]):
+                max_errors.append(max_error(y_true[:, i], y_pred[:, i]))
+            overall_max_error = max(max_errors)
             overall_median_ae = median_absolute_error(y_true, y_pred)
             
             # Calculate MAPE (avoiding division by zero)
@@ -696,7 +718,7 @@ class OptimizedAlloyPredictor:
             
             # Individual alloy metrics
             individual_metrics = {}
-            for i, alloy in enumerate(self.alloy_targets):
+            for i, alloy in enumerate(self.target_alloys):
                 y_true_alloy = y_true[:, i]
                 y_pred_alloy = y_pred[:, i]
                 
@@ -939,7 +961,7 @@ class OptimizedAlloyPredictor:
                 'training_time': self.training_time,
                 'cv_scores': self.cv_scores.tolist() if hasattr(self.cv_scores, 'tolist') else [],
                 'best_params': self.best_params,
-                'alloy_targets': self.alloy_targets,
+                'target_alloys': self.target_alloys,  # Fixed attribute name
                 'use_gpu': self.use_gpu,
                 'model_version': '1.0',
                 'timestamp': datetime.now().isoformat()
@@ -985,7 +1007,7 @@ class OptimizedAlloyPredictor:
             with open(metadata_path, 'rb') as f:
                 metadata = pickle.load(f)
             
-            self.alloy_targets = metadata.get('alloy_targets', [])
+            self.target_alloys = metadata.get('target_alloys', [])  # Fixed attribute name
             self.best_params = metadata.get('best_params', {})
             logger.info(f"   ✅ Metadata loaded: {metadata_path}")
             
@@ -1021,7 +1043,7 @@ class OptimizedAlloyPredictor:
                 input_data[f'target_{element}'] = current_composition.get(element, 0.0)
             
             # Add dummy alloy quantities (will be predicted)
-            for alloy in self.alloy_targets:
+            for alloy in self.target_alloys:
                 input_data[f'alloy_{alloy}_kg'] = 0.0
             
             # Create DataFrame and engineer features
@@ -1038,7 +1060,7 @@ class OptimizedAlloyPredictor:
             recommendations = []
             total_cost = 0.0
             
-            for i, alloy in enumerate(self.alloy_targets):
+            for i, alloy in enumerate(self.target_alloys):
                 predicted_kg = max(0, predictions[0][i])  # Ensure non-negative
                 if predicted_kg > 0.1:  # Only include significant amounts
                     # Estimate cost (placeholder pricing)

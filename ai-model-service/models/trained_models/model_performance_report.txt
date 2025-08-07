@@ -1,0 +1,103 @@
+================================================================================
+METALLISENSE AI - COMPREHENSIVE MODEL PERFORMANCE REPORT
+================================================================================
+Generated: 2025-08-07T23:22:15.048624
+Model Type: XGBoost MultiOutput Regressor
+GPU Acceleration: True
+Training Time: 0.00 seconds
+
+MODEL ARCHITECTURE:
+----------------------------------------
+Features: 47
+Training Samples: 20000
+Target Variables: 8
+
+OVERALL MODEL PERFORMANCE:
+----------------------------------------
+R² Score: -3.7852
+Mean Squared Error: 1302996.95
+Root Mean Squared Error: 1141.49
+Mean Absolute Error: 191.89
+Mean Absolute Percentage Error: 2.13%
+Explained Variance: -3.7841
+Max Error: 221050.80
+Median Absolute Error: 79.84
+
+INDIVIDUAL ALLOY PERFORMANCE:
+----------------------------------------
+
+CHROMIUM:
+  R² Score: 0.1383
+  RMSE: 989.07 kg
+  MAE: 283.23 kg
+  MAPE: 2.07%
+  Binary Accuracy (>1kg): 0.796
+
+NICKEL:
+  R² Score: 0.1540
+  RMSE: 1346.67 kg
+  MAE: 344.55 kg
+  MAPE: 2.52%
+  Binary Accuracy (>1kg): 0.738
+
+MOLYBDENUM:
+  R² Score: 0.1752
+  RMSE: 693.98 kg
+  MAE: 222.50 kg
+  MAPE: 1.66%
+  Binary Accuracy (>1kg): 0.671
+
+COPPER:
+  R² Score: -0.0111
+  RMSE: 723.32 kg
+  MAE: 317.39 kg
+  MAPE: 2.44%
+  Binary Accuracy (>1kg): 0.919
+
+ALUMINUM:
+  R² Score: -0.8450
+  RMSE: 1748.09 kg
+  MAE: 209.68 kg
+  MAPE: 0.93%
+  Binary Accuracy (>1kg): 0.019
+
+TITANIUM:
+  R² Score: -29.3208
+  RMSE: 1695.52 kg
+  MAE: 68.55 kg
+  MAPE: 0.71%
+  Binary Accuracy (>1kg): 0.077
+
+VANADIUM:
+  R² Score: -0.1730
+  RMSE: 546.59 kg
+  MAE: 27.62 kg
+  MAPE: 0.99%
+  Binary Accuracy (>1kg): 0.371
+
+NIOBIUM:
+  R² Score: -0.3998
+  RMSE: 630.90 kg
+  MAE: 61.58 kg
+  MAPE: 1.02%
+  Binary Accuracy (>1kg): 0.044
+
+CROSS-VALIDATION RESULTS:
+----------------------------------------
+Mean CV MSE: 1474347.27
+CV Standard Deviation: 399316.98
+
+MODEL ASSESSMENT:
+----------------------------------------
+Model Complexity: High
+Data Quality: Poor
+
+OPTIMIZED HYPERPARAMETERS:
+----------------------------------------
+estimator__learning_rate: 0.030000000000000002
+estimator__max_depth: 5
+estimator__n_estimators: 150
+
+================================================================================
+END OF REPORT
+================================================================================
