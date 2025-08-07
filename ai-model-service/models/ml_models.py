@@ -23,7 +23,6 @@ warnings.filterwarnings('ignore', message=".*XGBoost is running on.*while the in
 # Filter out other common warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=UserWarning, module='xgboost')
-logger.info("🔇 Suppressing non-critical XGBoost device warnings during cross-validation")
 
 # ML libraries
 from sklearn.model_selection import (
@@ -57,6 +56,9 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
+
+# Log that we've configured warning suppression for better user experience
+logger.info("🔇 Suppressing non-critical XGBoost device warnings during cross-validation")
 
 class EnhancedMLTrainer:
     """Enhanced ML trainer with hyperparameter tuning and GPU acceleration"""
