@@ -208,13 +208,9 @@ def generate_massive_recommendation_dataset(num_samples=100000):
                 adjustments, scenario, grade_type, market, recommended_alloys
             )
             
-            # Create comprehensive recommendation record
+            # Create comprehensive recommendation record in the CORRECT format for OptimizedAlloyPredictor
             recommendation = {
-                "metal_grade": grade_name,
-                "initial_composition": initial_comp,
-                "target_composition_values": target_comp,
-                "composition_adjustments": adjustments,
-                "recommended_alloys": recommended_alloys,
+                "grade": grade_name,  # Changed from "metal_grade"
                 "melt_size_kg": melt_size,
                 "scenario": scenario,
                 "grade_type": grade_type,
@@ -229,6 +225,40 @@ def generate_massive_recommendation_dataset(num_samples=100000):
                 "risk_assessment": _generate_risk_assessment(scenario, market, confidence),
                 "created_at": datetime.now(timezone.utc)
             }
+            
+            # Add current composition as individual fields (current_C, current_Si, etc.)
+            elements = ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']
+            for element in elements:
+                recommendation[f'current_{element}'] = initial_comp.get(element, 0.0)
+            
+            # Add target composition as individual fields (target_C, target_Si, etc.)
+            for element in elements:
+                recommendation[f'target_{element}'] = target_comp.get(element, 0.0)
+            
+            # Add alloy quantity predictions as individual fields for ML training
+            # Initialize alloy quantities to 0
+            for alloy_key in ['chromium', 'nickel', 'molybdenum', 'copper', 'aluminum', 'titanium', 'vanadium', 'niobium']:
+                recommendation[f'alloy_{alloy_key}_kg'] = 0.0
+            
+            # Set recommended alloy quantities based on adjustments
+            for alloy_name, quantity in recommended_alloys.items():
+                # Map alloy names to our standard target alloys
+                if 'Cr' in alloy_name or 'FeCr' in alloy_name:
+                    recommendation['alloy_chromium_kg'] = float(quantity)
+                elif 'Ni' in alloy_name or 'FeNi' in alloy_name:
+                    recommendation['alloy_nickel_kg'] = float(quantity)
+                elif 'Mo' in alloy_name or 'FeMo' in alloy_name:
+                    recommendation['alloy_molybdenum_kg'] = float(quantity)
+                elif 'Cu' in alloy_name:
+                    recommendation['alloy_copper_kg'] = float(quantity)
+                elif 'Al' in alloy_name:
+                    recommendation['alloy_aluminum_kg'] = float(quantity)
+                elif 'Ti' in alloy_name:
+                    recommendation['alloy_titanium_kg'] = float(quantity)
+                elif 'V' in alloy_name:
+                    recommendation['alloy_vanadium_kg'] = float(quantity)
+                elif 'Nb' in alloy_name:
+                    recommendation['alloy_niobium_kg'] = float(quantity)
             
             recommendations.append(recommendation)
             
@@ -538,9 +568,9 @@ def save_massive_to_mongodb(recommendations):
             return False
         
         # Clear existing data
-        collection = mongo_client.db["alloy_recommendations"]
+        collection = mongo_client.db["training_data"]
         collection.drop()
-        logger.info("Cleared existing alloy_recommendations collection")
+        logger.info("Cleared existing training_data collection")
         
         # Insert in optimized batches
         batch_size = 5000  # Larger batches for massive dataset
@@ -552,7 +582,7 @@ def save_massive_to_mongodb(recommendations):
             total_inserted += len(result.inserted_ids)
             logger.info(f"Inserted massive batch {i//batch_size + 1}: {len(result.inserted_ids):,} records ({total_inserted:,} total)")
         
-        logger.info(f"🎯 Total inserted: {total_inserted:,} MASSIVE alloy recommendations")
+        logger.info(f"🎯 Total inserted: {total_inserted:,} training samples in correct format for OptimizedAlloyPredictor")
         mongo_client.close()
         return True
         
