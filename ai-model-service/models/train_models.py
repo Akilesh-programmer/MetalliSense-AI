@@ -309,9 +309,14 @@ def train_and_save_models():
         # Initialize enhanced trainer
         logger.info("⚙️ Initializing Enhanced ML Trainer with GPU acceleration...")
         trainer_start = time.time()
-        trainer = EnhancedMLTrainer(use_gpu=True, optimization_method='bayesian')
+        trainer = EnhancedMLTrainer(
+            use_gpu=True, 
+            optimization_method='random',  # 'random' for faster training with RandomizedSearchCV
+            target_classes=40  # Target number of classes for improved accuracy
+        )
         trainer_elapsed = time.time() - trainer_start
         logger.info(f"✅ Trainer initialized in {trainer_elapsed:.2f}s")
+        logger.info(f"🔧 Configuration: GPU={trainer.use_gpu}, Optimization={trainer.optimization_method}, Target Classes={trainer.target_classes}")
         
         # Training pipeline with 4 models
         total_models = 4
