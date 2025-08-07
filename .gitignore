@@ -83,3 +83,5 @@ ai-model-service/logs/
 *.temp
 .cache/
 *.bak
+TODO
+.env.example

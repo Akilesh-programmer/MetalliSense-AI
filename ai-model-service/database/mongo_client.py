@@ -8,23 +8,27 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 import os
 from typing import Dict, List, Any, Optional
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 class MongoDBClient:
     """MongoDB client for MetalliSense AI Model Service"""
     
-    def __init__(self, connection_string: str = "mongodb+srv://akilesh:Akilesh%40123@cluster0.gmfo4jh.mongodb.net/", 
-                 db_name: str = "MetalliSense"):
+    def __init__(self, connection_string: str = None, 
+                 db_name: str = None):
         """
         Initialize MongoDB client
         
         Args:
-            connection_string: MongoDB connection string (default: Atlas cluster)
-            db_name: Database name (default: MetalliSense to match existing DB)
+            connection_string: MongoDB connection string (default: from environment)
+            db_name: Database name (default: from environment)
         """
-        self.connection_string = connection_string
-        self.db_name = db_name
+        self.connection_string = connection_string or os.getenv("MONGODB_CONNECTION_STRING", "mongodb://localhost:27017/")
+        self.db_name = db_name or os.getenv("MONGODB_DATABASE_NAME", "MetalliSense")
         self.client = None
         self.db = None
     

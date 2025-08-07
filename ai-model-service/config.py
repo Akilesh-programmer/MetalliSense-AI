@@ -60,6 +60,10 @@ ALLOY_COSTS = {
     "Magnesium": 3.50
 }
 
+# MongoDB Configuration
+MONGODB_CONNECTION_STRING = os.getenv("MONGODB_CONNECTION_STRING", "mongodb://localhost:27017/")
+MONGODB_DATABASE_NAME = os.getenv("MONGODB_DATABASE_NAME", "MetalliSense")
+
 # Production Database Configuration (if needed)
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 REDIS_URL = os.getenv("REDIS_URL", "")
