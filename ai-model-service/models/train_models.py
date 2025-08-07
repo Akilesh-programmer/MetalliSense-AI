@@ -46,8 +46,8 @@ def load_training_data_from_mongodb():
         return None
     
     try:
-        # Load from alloy_recommendations collection
-        collection = mongo_client.db['alloy_recommendations']
+        # Load from training_data collection (new format)
+        collection = mongo_client.db['training_data']
         cursor = collection.find({})
         
         data_list = []
@@ -57,22 +57,21 @@ def load_training_data_from_mongodb():
                 training_row = {
                     'grade': doc.get('grade', 'UNKNOWN'),
                     'melt_size_kg': doc.get('melt_size_kg', 1000),
-                    'confidence': doc.get('confidence', 0.8),
-                    'cost': doc.get('cost', 0.0)
+                    'confidence': doc.get('confidence_score', 0.8),
+                    'cost': doc.get('cost_per_100kg', 0.0)
                 }
                 
-                # Current composition
-                current_comp = doc.get('current_composition', {})
+                # Current composition (already individual fields)
                 for element in ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']:
-                    training_row[f'current_{element}'] = current_comp.get(element, 0.0)
+                    training_row[f'current_{element}'] = doc.get(f'current_{element}', 0.0)
                 
-                # Target composition
-                target_comp = doc.get('target_composition', {})
+                # Target composition (already individual fields)
                 for element in ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu']:
-                    training_row[f'target_{element}'] = target_comp.get(element, 0.0)
+                    training_row[f'target_{element}'] = doc.get(f'target_{element}', 0.0)
                 
-                # Recommended alloys (for target prediction)
-                training_row['recommended_alloys'] = doc.get('recommended_alloys', {})
+                # Alloy quantities (already individual fields) - these are the target variables
+                for alloy in ['chromium', 'nickel', 'molybdenum', 'copper', 'aluminum', 'titanium', 'vanadium', 'niobium']:
+                    training_row[f'alloy_{alloy}_kg'] = doc.get(f'alloy_{alloy}_kg', 0.0)
                 
                 data_list.append(training_row)
                 
@@ -121,6 +120,18 @@ def display_training_summary(training_data):
             max_val = training_data[col].max()
             avg_val = training_data[col].mean()
             logger.info(f"     {element}: {min_val:.4f} - {max_val:.4f} (avg: {avg_val:.4f})")
+    
+    # Alloy quantities statistics (target variables)
+    alloys = ['chromium', 'nickel', 'molybdenum', 'copper']
+    logger.info("   Target alloy quantities (kg):")
+    for alloy in alloys:
+        col = f'alloy_{alloy}_kg'
+        if col in training_data.columns:
+            min_val = training_data[col].min()
+            max_val = training_data[col].max()
+            avg_val = training_data[col].mean()
+            non_zero = (training_data[col] > 0).sum()
+            logger.info(f"     {alloy}: {min_val:.2f} - {max_val:.2f} (avg: {avg_val:.2f}, non-zero: {non_zero})")
 
 def main():
     """Main training pipeline"""
