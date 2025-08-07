@@ -15,11 +15,15 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Tuple, Callable, Optional, Union
 import warnings
 
-# Filter out specific XGBoost warnings about device mismatches
+# Filter out specific XGBoost warnings about device mismatches during cross-validation
+# These warnings occur during hyperparameter tuning but don't affect final model performance
 warnings.filterwarnings('ignore', message=".*Falling back to prediction using DMatrix due to mismatched devices.*")
+warnings.filterwarnings('ignore', message=".*This might lead to higher memory usage and slower performance.*")
+warnings.filterwarnings('ignore', message=".*XGBoost is running on.*while the input data is on.*")
 # Filter out other common warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
-warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', category=UserWarning, module='xgboost')
+logger.info("🔇 Suppressing non-critical XGBoost device warnings during cross-validation")
 
 # ML libraries
 from sklearn.model_selection import (
@@ -91,9 +95,10 @@ class EnhancedMLTrainer:
                     logger.info("✅ GPU acceleration fully available for XGBoost (including predict_proba)")
                 except Exception as e:
                     logger.warning(f"⚠️ predict_proba with GPU has limitations: {e}")
-                    logger.info("⚠️ Will use CPU fallback for predict_proba operations")
+                    logger.info("⚠️ Will optimize for GPU usage during cross-validation")
                 
-                logger.info("✅ GPU acceleration available for XGBoost")
+                self.use_gpu = True
+                logger.info("🚀 GPU acceleration enabled - maximizing GPU utilization for training and inference")
             except Exception as e:
                 logger.warning(f"⚠️ GPU not available for XGBoost: {e}")
                 self.use_gpu = False
@@ -246,11 +251,12 @@ class EnhancedMLTrainer:
                 X_train_scaled, y_train, test_size=0.2, random_state=42, stratify=y_train
             )
             
-            # Clone model with early stopping
+            # Clone model with early stopping and ensure GPU usage for final training
             params = model.get_params()
             params.update({
                 'early_stopping_rounds': 10,
-                'eval_metric': 'merror'
+                'eval_metric': 'merror',
+                'device': 'cuda' if self.use_gpu else 'cpu'  # Use GPU for final training
             })
             early_stopping_model = xgb.XGBClassifier(**params)
             
@@ -563,6 +569,7 @@ class EnhancedMLTrainer:
             # Use stratified k-fold for consistent evaluation
             cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
             
+            # Use GPU for better performance
             model = xgb.XGBClassifier(
                 tree_method='hist',
                 device='cuda' if self.use_gpu else 'cpu',
@@ -574,7 +581,7 @@ class EnhancedMLTrainer:
             search = RandomizedSearchCV(
                 model, param_dist, n_iter=50, cv=cv,
                 scoring='accuracy', random_state=42, 
-                n_jobs=-1, verbose=1
+                n_jobs=1, verbose=1  # Use n_jobs=1 for better GPU compatibility
             )
             
             # Fit the model
@@ -608,6 +615,7 @@ class EnhancedMLTrainer:
             
             @use_named_args(dimensions)
             def objective(**params):
+                # Use GPU for better performance
                 model = xgb.XGBClassifier(
                     tree_method='hist',
                     device='cuda' if self.use_gpu else 'cpu',
@@ -697,6 +705,7 @@ class EnhancedMLTrainer:
                 'learning_rate': [0.01, 0.05, 0.1, 0.2],
             }
             
+            # Use GPU for better performance
             model = xgb.XGBClassifier(
                 tree_method='hist',
                 device='cuda' if self.use_gpu else 'cpu',
@@ -750,10 +759,10 @@ class EnhancedMLTrainer:
                 'reg_lambda': [1e-9, 1e-6, 1e-3, 0.01, 0.1, 1.0]
             }
             
-            # For cross-validation, use CPU to avoid device mismatch warnings
+            # Use GPU for better performance
             model = xgb.XGBRegressor(
                 tree_method='hist',
-                device='cpu',  # Always use CPU for cross-validation
+                device='cuda' if self.use_gpu else 'cpu',
                 objective='reg:squarederror',
                 random_state=42
             )
@@ -761,7 +770,7 @@ class EnhancedMLTrainer:
             logger.info("🔍 Running RandomizedSearchCV with 50 iterations...")
             search = RandomizedSearchCV(
                 model, param_dist, n_iter=50, cv=3,
-                scoring='r2', random_state=42, n_jobs=-1, verbose=1
+                scoring='r2', random_state=42, n_jobs=1, verbose=1  # Use n_jobs=1 for better GPU compatibility
             )
             
             search.fit(X, y)
@@ -787,10 +796,10 @@ class EnhancedMLTrainer:
                 'reg_lambda': Real(1e-9, 1.0, prior='log-uniform')
             }
             
-            # For cross-validation, use CPU to avoid device mismatch warnings
+            # Use GPU for better performance
             model = xgb.XGBRegressor(
                 tree_method='hist',
-                device='cpu',  # Always use CPU for cross-validation
+                device='cuda' if self.use_gpu else 'cpu',
                 objective='reg:squarederror',
                 random_state=42,
                 n_jobs=-1
@@ -822,10 +831,10 @@ class EnhancedMLTrainer:
                 'learning_rate': [0.01, 0.05, 0.1, 0.2],
             }
             
-            # For cross-validation, use CPU to avoid device mismatch warnings
+            # Use GPU for better performance
             model = xgb.XGBRegressor(
                 tree_method='hist',
-                device='cpu',  # Always use CPU for cross-validation
+                device='cuda' if self.use_gpu else 'cpu',
                 objective='reg:squarederror',
                 random_state=42
             )
@@ -833,7 +842,7 @@ class EnhancedMLTrainer:
             logger.info("🔍 Running Grid Search for XGBoost regressor...")
             
             search = GridSearchCV(
-                model, param_grid, cv=3, scoring='r2', n_jobs=-1, verbose=1
+                model, param_grid, cv=3, scoring='r2', n_jobs=1, verbose=1  # Use n_jobs=1 for better GPU compatibility
             )
             
             search.fit(X, y)
@@ -988,8 +997,8 @@ class EnhancedMLTrainer:
         """Ensure data is on the correct device for model inference to avoid warnings.
         
         This method helps avoid the "mismatched devices" warning from XGBoost when a model 
-        is trained on GPU but predictions are made with data on CPU. It attempts to convert
-        data to an XGBoost DMatrix when appropriate.
+        is trained on GPU but predictions are made with data on CPU. The key is to provide
+        data in the right format for GPU models.
         
         Args:
             model: The model to check for device compatibility
@@ -1001,41 +1010,30 @@ class EnhancedMLTrainer:
         """
         # Check if it's an XGBoost model and we're using GPU
         if self.use_gpu and hasattr(model, 'get_params') and 'device' in model.get_params() and model.get_params()['device'] == 'cuda':
-            # For predict_proba, we need a different approach since DMatrix doesn't work directly with predict_proba
-            if for_predict_proba:
-                try:
-                    # Get data array
-                    if hasattr(X, 'values'):  # For pandas DataFrame
-                        x_values = X.values
+            try:
+                # Get data array with consistent format
+                if hasattr(X, 'values'):  # For pandas DataFrame
+                    x_values = X.values.astype(np.float32)  # Use float32 for GPU efficiency
+                else:
+                    x_values = np.array(X, dtype=np.float32)
+                
+                # For predict_proba, return numpy array directly (GPU can handle this)
+                if for_predict_proba:
+                    logger.debug("🔄 Providing float32 numpy array for GPU predict_proba")
+                    return x_values
+                else:
+                    # For predict, use DMatrix for best GPU performance
+                    if not isinstance(X, xgb.DMatrix):
+                        logger.debug("🔄 Converting to DMatrix for optimal GPU predict performance")
+                        dmatrix = xgb.DMatrix(x_values)
+                        return dmatrix
                     else:
-                        x_values = X
-                    
-                    # For predict_proba, we need to ensure data is in numpy array format
-                    logger.debug("🔄 Ensuring data is in correct format for predict_proba with GPU")
-                    return np.asarray(x_values)
-                except Exception as e:
-                    logger.warning(f"⚠️ Warning: Could not format data for predict_proba GPU compatibility: {e}")
-                    return X
-            else:
-                try:
-                    # If already a DMatrix, return it
-                    if isinstance(X, xgb.DMatrix):
                         return X
-                    
-                    # Get data array
-                    if hasattr(X, 'values'):  # For pandas DataFrame
-                        x_values = X.values
-                    else:
-                        x_values = X
-                    
-                    # Create DMatrix with explicit device specification
-                    logger.debug("🔄 Converting data to DMatrix for GPU compatibility")
-                    dmatrix = xgb.DMatrix(x_values)
-                    return dmatrix
-                except Exception as e:
-                    logger.warning(f"⚠️ Warning: Could not convert data for GPU compatibility: {e}")
-                    # If conversion fails, return original data
-                    return X
+                        
+            except Exception as e:
+                logger.warning(f"⚠️ Warning: Could not optimize data for GPU compatibility: {e}")
+                # Fallback to original data
+                return X
         
         # For non-XGBoost models or CPU XGBoost, return the original data
         return X
