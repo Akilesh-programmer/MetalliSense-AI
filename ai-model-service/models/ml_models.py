@@ -548,10 +548,6 @@ class EnhancedMLTrainer:
                 'reg_lambda': [1e-9, 1e-6, 1e-3, 0.01, 0.1, 1.0]
             }
             
-            # Create custom scoring function for early stopping
-            from sklearn.metrics import make_scorer, accuracy_score
-            from sklearn.base import clone
-            
             # Use stratified k-fold for consistent evaluation
             cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
             
@@ -561,86 +557,28 @@ class EnhancedMLTrainer:
                 random_state=42
             )
             
-            # Create verbose callback for RandomizedSearchCV
-            from sklearn.model_selection._search import BaseSearchCV
-            
-            class VerboseCallback:
-                def __init__(self, estimator, start_time):
-                    self.estimator = estimator
-                    self.start_time = start_time
-                    self.iteration = 0
-                    self.total_iterations = 50  # Default
-                    self.best_score = -np.inf
-                    self.last_status_time = time.time()
-                    
-                def __call__(self, *args, **kwargs):
-                    self.iteration += 1
-                    
-                    # For RandomizedSearchCV we know total iterations
-                    if isinstance(self.estimator, RandomizedSearchCV):
-                        self.total_iterations = self.estimator.n_iter
-                    
-                    current_time = time.time()
-                    elapsed = current_time - self.start_time
-                    elapsed_str = str(timedelta(seconds=int(elapsed)))
-                    
-                    # Get current best score if available
-                    current_best = -np.inf
-                    if hasattr(self.estimator, 'best_score_'):
-                        current_best = self.estimator.best_score_
-                    
-                    # Calculate remaining time
-                    avg_time_per_iter = elapsed / self.iteration
-                    remaining_iters = self.total_iterations - self.iteration
-                    eta = avg_time_per_iter * remaining_iters
-                    eta_str = str(timedelta(seconds=int(eta)))
-                    
-                    # Calculate progress percentage
-                    progress = (self.iteration / self.total_iterations) * 100
-                    
-                    # Log if better score found or if 60 seconds elapsed since last log
-                    if current_best > self.best_score:
-                        self.best_score = current_best
-                        logger.info(f"🚀 Iteration {self.iteration}/{self.total_iterations} ({progress:.1f}%): "
-                                   f"New best score: {current_best:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-                    elif (current_time - self.last_status_time) > 60:  # Log status every 60 seconds
-                        self.last_status_time = current_time
-                        logger.info(f"⏱️ Iteration {self.iteration}/{self.total_iterations} ({progress:.1f}%): "
-                                   f"Current best: {current_best:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-            
             # Create and run randomized search
-            logger.info(f"🔍 Starting RandomizedSearchCV with 50 iterations...")
+            logger.info("🔍 Starting RandomizedSearchCV with 50 iterations...")
             search = RandomizedSearchCV(
                 model, param_dist, n_iter=50, cv=cv,
                 scoring='accuracy', random_state=42, 
-                n_jobs=-1, verbose=1  # Use minimal built-in verbosity
+                n_jobs=-1, verbose=1
             )
             
-            # Create a callback to periodically report progress
-            total_iters = 50
-            last_update_time = time.time()
-            
-            # Instead of monkey patching, we'll just log before and after
-            logger.info(f"⏱️ Starting hyperparameter search with {total_iters} iterations...")
-            start_time = time.time()
-            
             # Fit the model
+            logger.info("⏱️ Starting hyperparameter search with 50 iterations...")
             search.fit(X, y)
-            end_time = time.time()
-            opt_elapsed = end_time - opt_start
+            opt_elapsed = time.time() - opt_start
             
             logger.info(f"✅ RandomizedSearchCV completed in {opt_elapsed:.2f}s")
             logger.info(f"🏆 Best accuracy: {search.best_score_:.4f}")
             logger.info(f"🔧 Best parameters: {search.best_params_}")
             
         elif self.optimization_method == 'bayesian':
-            # Original Bayesian implementation
             logger.info("🎯 Using Bayesian optimization for hyperparameter tuning...")
             opt_start = time.time()
             
-            # Use a simpler manual approach with progress tracking
+            # Use a simpler approach with skopt
             from skopt.utils import use_named_args
             from skopt import gp_minimize
             from skopt.space import Real, Integer
@@ -656,16 +594,8 @@ class EnhancedMLTrainer:
                 Real(1e-9, 1.0, prior='log-uniform', name='reg_lambda')
             ]
             
-            best_score = -np.inf
-            iteration_count = 0
-            total_iterations = 30
-            last_status_time = time.time()
-            
             @use_named_args(dimensions)
             def objective(**params):
-                nonlocal iteration_count, best_score, last_status_time
-                iteration_count += 1
-                
                 model = xgb.XGBClassifier(
                     tree_method='hist',
                     device='cuda' if self.use_gpu else 'cpu',
@@ -676,34 +606,6 @@ class EnhancedMLTrainer:
                 
                 scores = cross_val_score(model, X, y, cv=3, scoring='accuracy')
                 current_score = scores.mean()
-                
-                # Calculate progress and time estimates
-                current_time = time.time()
-                elapsed = current_time - start_time
-                elapsed_str = str(timedelta(seconds=int(elapsed)))
-                
-                # Calculate ETA
-                avg_time_per_iter = elapsed / iteration_count
-                remaining_iters = total_iterations - iteration_count
-                eta = avg_time_per_iter * remaining_iters
-                eta_str = str(timedelta(seconds=int(eta)))
-                
-                # Calculate progress percentage
-                progress = (iteration_count / total_iterations) * 100
-                
-                if current_score > best_score:
-                    best_score = current_score
-                    logger.info(f"🚀 Iteration {iteration_count}/{total_iterations} ({progress:.1f}%): "
-                               f"New best score: {current_score:.4f} - "
-                               f"Elapsed: {elapsed_str}, ETA: {eta_str} - "
-                               f"params: n_est={params['n_estimators']}, depth={params['max_depth']}, "
-                               f"lr={params['learning_rate']:.4f}")
-                elif (current_time - last_status_time) > 60:  # Log status every 60 seconds
-                    last_status_time = current_time
-                    logger.info(f"⏱️ Iteration {iteration_count}/{total_iterations} ({progress:.1f}%): "
-                               f"Current score: {current_score:.4f} - "
-                               f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-                
                 return -current_score  # Minimize negative accuracy
             
             logger.info("🔍 Starting Bayesian optimization with 30 iterations...")
@@ -725,22 +627,13 @@ class EnhancedMLTrainer:
             logger.info(f"🔧 Best parameters: {best_params}")
             
         elif self.optimization_method == 'optuna':
-            # Original Optuna implementation with enhanced logging
             logger.info("🎯 Using Optuna optimization for hyperparameter tuning...")
             opt_start = time.time()
             
-            # Suppress Optuna logs and add custom progress tracking
+            # Suppress Optuna logs
             optuna.logging.set_verbosity(optuna.logging.WARNING)
             
-            best_score = 0
-            trial_count = 0
-            total_trials = 30
-            last_status_time = time.time()
-            
             def objective(trial):
-                nonlocal trial_count, best_score, last_status_time
-                trial_count += 1
-                
                 params = {
                     'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
                     'max_depth': trial.suggest_int('max_depth', 3, 10),
@@ -758,38 +651,15 @@ class EnhancedMLTrainer:
                 scores = cross_val_score(model, X, y, cv=3, scoring='accuracy')
                 current_score = scores.mean()
                 
-                # Calculate progress and time estimates
-                current_time = time.time()
-                elapsed = current_time - start_time
-                elapsed_str = str(timedelta(seconds=int(elapsed)))
-                
-                # Calculate ETA
-                avg_time_per_iter = elapsed / trial_count
-                remaining_iters = total_trials - trial_count
-                eta = avg_time_per_iter * remaining_iters
-                eta_str = str(timedelta(seconds=int(eta)))
-                
-                # Calculate progress percentage
-                progress = (trial_count / total_trials) * 100
-                
-                if current_score > best_score:
-                    best_score = current_score
-                    logger.info(f"🚀 Trial {trial_count}/{total_trials} ({progress:.1f}%): "
-                               f"New best score: {current_score:.4f} - "
-                               f"Elapsed: {elapsed_str}, ETA: {eta_str} - "
-                               f"n_est={params['n_estimators']}, depth={params['max_depth']}, "
-                               f"lr={params['learning_rate']:.4f}")
-                elif (current_time - last_status_time) > 60:  # Log status every 60 seconds
-                    last_status_time = current_time
-                    logger.info(f"⏱️ Trial {trial_count}/{total_trials} ({progress:.1f}%): "
-                               f"Current score: {current_score:.4f} - "
-                               f"Elapsed: {elapsed_str}, ETA: {eta_str}")
+                # Log only significant improvements
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
                 
                 return current_score
             
             study = optuna.create_study(direction='maximize')
             logger.info("🔍 Starting Optuna optimization with 30 trials...")
-            study.optimize(objective, n_trials=30, show_progress_bar=False)
+            study.optimize(objective, n_trials=30)
             
             best_params = study.best_params
             best_params.update({
@@ -821,14 +691,11 @@ class EnhancedMLTrainer:
                 random_state=42
             )
             
-            total_combinations = np.prod([len(v) for v in param_grid.values()])
-            logger.info(f"🔍 Running Grid Search with {total_combinations} combinations...")
-            
             # Use a stratified k-fold
             cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
             
             search = GridSearchCV(
-                model, param_grid, cv=cv, scoring='accuracy', n_jobs=-1, verbose=2
+                model, param_grid, cv=cv, scoring='accuracy', n_jobs=-1, verbose=1
             )
             search.fit(X, y)
             opt_elapsed = time.time() - opt_start
@@ -917,60 +784,9 @@ class EnhancedMLTrainer:
             
             logger.info("🔍 Running Bayesian search for regressor with 30 iterations...")
             
-            # Create a callback for BayesSearchCV
-            from skopt.callbacks import VerboseCallback as SkoptVerboseCallback
-            
-            class CustomVerboseCallback(SkoptVerboseCallback):
-                def __init__(self, n_total=30):
-                    self.n_total = n_total
-                    self.n_called = 0
-                    self.start_time = time.time()
-                    self.last_status_time = time.time()
-                    self.best_score = -np.inf
-                
-                def __call__(self, result):
-                    self.n_called += 1
-                    
-                    # Get current best score
-                    current_best = -result.fun if result.fun is not None else -np.inf
-                    
-                    # Calculate progress and time estimates
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    elapsed_str = str(timedelta(seconds=int(elapsed)))
-                    
-                    # Calculate ETA
-                    avg_time_per_iter = elapsed / self.n_called
-                    remaining_iters = self.n_total - self.n_called
-                    eta = avg_time_per_iter * remaining_iters
-                    eta_str = str(timedelta(seconds=int(eta)))
-                    
-                    # Calculate progress percentage
-                    progress = (self.n_called / self.n_total) * 100
-                    
-                    if current_best > self.best_score:
-                        self.best_score = current_best
-                        param_names = list(search_spaces.keys())
-                        param_values = result.x if result.x is not None else []
-                        params = dict(zip(param_names, param_values))
-                        
-                        logger.info(f"🚀 Iteration {self.n_called}/{self.n_total} ({progress:.1f}%): "
-                                   f"New best R² score: {current_best:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str} - "
-                                   f"n_est={params.get('n_estimators', 'N/A')}, "
-                                   f"depth={params.get('max_depth', 'N/A')}")
-                    elif (current_time - self.last_status_time) > 60:  # Log status every 60 seconds
-                        self.last_status_time = current_time
-                        logger.info(f"⏱️ Iteration {self.n_called}/{self.n_total} ({progress:.1f}%): "
-                                   f"Current best R²: {self.best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-            
-            callback = CustomVerboseCallback(n_total=30)
-            
             search = BayesSearchCV(
                 model, search_spaces, n_iter=30, cv=3, 
-                scoring='r2', random_state=42, n_jobs=1, verbose=0,
-                callback=[callback]
+                scoring='r2', random_state=42, n_jobs=1, verbose=1
             )
             
             search.fit(X, y)
@@ -999,57 +815,10 @@ class EnhancedMLTrainer:
                 random_state=42
             )
             
-            total_combinations = np.prod([len(v) for v in param_grid.values()])
-            logger.info(f"🔍 Running Grid Search with {total_combinations} combinations...")
-            
-            # Create custom callback for verbose logging
-            class GridSearchCallback:
-                def __init__(self, total_combinations):
-                    self.total_combinations = total_combinations
-                    self.current_iter = 0
-                    self.best_score = -np.inf
-                    self.start_time = time.time()
-                    self.last_status_time = time.time()
-                
-                def __call__(self, cv_results):
-                    self.current_iter += 1
-                    
-                    current_best_idx = np.argmax(cv_results['mean_test_score'])
-                    current_best_score = cv_results['mean_test_score'][current_best_idx]
-                    
-                    # Calculate progress and time estimates
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    elapsed_str = str(timedelta(seconds=int(elapsed)))
-                    
-                    # Calculate ETA
-                    avg_time_per_iter = elapsed / self.current_iter
-                    remaining_iters = self.total_combinations - self.current_iter
-                    eta = avg_time_per_iter * remaining_iters
-                    eta_str = str(timedelta(seconds=int(eta)))
-                    
-                    # Calculate progress percentage
-                    progress = (self.current_iter / self.total_combinations) * 100
-                    
-                    if current_best_score > self.best_score:
-                        self.best_score = current_best_score
-                        params = cv_results['params'][current_best_idx]
-                        logger.info(f"� Combination {self.current_iter}/{self.total_combinations} ({progress:.1f}%): "
-                                   f"New best R² score: {current_best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str} - "
-                                   f"n_est={params.get('n_estimators')}, "
-                                   f"depth={params.get('max_depth')}")
-                    elif (current_time - self.last_status_time) > 60:  # Log status every 60 seconds
-                        self.last_status_time = current_time
-                        logger.info(f"⏱️ Combination {self.current_iter}/{self.total_combinations} ({progress:.1f}%): "
-                                   f"Current best R²: {self.best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-            
-            callback = GridSearchCallback(total_combinations)
+            logger.info("🔍 Running Grid Search for XGBoost regressor...")
             
             search = GridSearchCV(
-                model, param_grid, cv=3, scoring='r2', n_jobs=-1, verbose=0,
-                callback=callback
+                model, param_grid, cv=3, scoring='r2', n_jobs=-1, verbose=1
             )
             
             search.fit(X, y)
@@ -1075,7 +844,6 @@ class EnhancedMLTrainer:
         if self.optimization_method == 'random':
             logger.info("🎯 Using Randomized Search for Random Forest classifier...")
             opt_start = time.time()
-            last_status_time = time.time()
             
             param_dist = {
                 'n_estimators': [100, 200, 300, 400, 500, 600, 700, 800],
@@ -1089,57 +857,9 @@ class EnhancedMLTrainer:
             model = RandomForestClassifier(random_state=42, n_jobs=-1)
             logger.info("🔍 Running Randomized Search with 50 iterations...")
             
-            # Create a callback class to handle verbose logging
-            from sklearn.base import BaseEstimator
-            
-            class VerboseCallback:
-                def __init__(self, n_iter=50):
-                    self.n_iter = n_iter
-                    self.current_iter = 0
-                    self.best_score = -np.inf
-                    self.start_time = time.time()
-                    self.last_status_time = time.time()
-                
-                def __call__(self, cv_results):
-                    self.current_iter += 1
-                    
-                    current_best_idx = np.argmax(cv_results['mean_test_score'])
-                    current_best_score = cv_results['mean_test_score'][current_best_idx]
-                    
-                    # Calculate progress and time estimates
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    elapsed_str = str(timedelta(seconds=int(elapsed)))
-                    
-                    # Calculate ETA
-                    avg_time_per_iter = elapsed / self.current_iter
-                    remaining_iters = self.n_iter - self.current_iter
-                    eta = avg_time_per_iter * remaining_iters
-                    eta_str = str(timedelta(seconds=int(eta)))
-                    
-                    # Calculate progress percentage
-                    progress = (self.current_iter / self.n_iter) * 100
-                    
-                    if current_best_score > self.best_score:
-                        self.best_score = current_best_score
-                        params = cv_results['params'][current_best_idx]
-                        logger.info(f"🚀 Iteration {self.current_iter}/{self.n_iter} ({progress:.1f}%): "
-                                   f"New best score: {current_best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str} - "
-                                   f"n_est={params.get('n_estimators')}, "
-                                   f"depth={params.get('max_depth')}")
-                    elif (current_time - self.last_status_time) > 60:  # Log status every 60 seconds
-                        self.last_status_time = current_time
-                        logger.info(f"⏱️ Iteration {self.current_iter}/{self.n_iter} ({progress:.1f}%): "
-                                   f"Current best: {self.best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-            
-            callback = VerboseCallback(n_iter=50)
-            
             search = RandomizedSearchCV(
                 model, param_dist, n_iter=50, cv=3, 
-                scoring='accuracy', random_state=42, n_jobs=-1, verbose=0,
-                callback=callback
+                scoring='accuracy', random_state=42, n_jobs=-1, verbose=1
             )
             
             search.fit(X, y)
@@ -1154,7 +874,6 @@ class EnhancedMLTrainer:
         else:  # Grid search
             logger.info("🎯 Using Grid Search for Random Forest classifier...")
             opt_start = time.time()
-            last_status_time = time.time()
             
             param_grid = {
                 'n_estimators': [100, 300, 500, 700],
@@ -1164,57 +883,9 @@ class EnhancedMLTrainer:
             }
             
             model = RandomForestClassifier(random_state=42, n_jobs=-1)
-            total_combinations = np.prod([len(v) for v in param_grid.values()])
-            logger.info(f"🔍 Running Grid Search with {total_combinations} combinations...")
-            
-            # Create custom callback for verbose logging
-            class GridSearchCallback:
-                def __init__(self, total_combinations):
-                    self.total_combinations = total_combinations
-                    self.current_iter = 0
-                    self.best_score = -np.inf
-                    self.start_time = time.time()
-                    self.last_status_time = time.time()
-                
-                def __call__(self, cv_results):
-                    self.current_iter += 1
-                    
-                    current_best_idx = np.argmax(cv_results['mean_test_score'])
-                    current_best_score = cv_results['mean_test_score'][current_best_idx]
-                    
-                    # Calculate progress and time estimates
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    elapsed_str = str(timedelta(seconds=int(elapsed)))
-                    
-                    # Calculate ETA
-                    avg_time_per_iter = elapsed / self.current_iter
-                    remaining_iters = self.total_combinations - self.current_iter
-                    eta = avg_time_per_iter * remaining_iters
-                    eta_str = str(timedelta(seconds=int(eta)))
-                    
-                    # Calculate progress percentage
-                    progress = (self.current_iter / self.total_combinations) * 100
-                    
-                    if current_best_score > self.best_score:
-                        self.best_score = current_best_score
-                        params = cv_results['params'][current_best_idx]
-                        logger.info(f"� Combination {self.current_iter}/{self.total_combinations} ({progress:.1f}%): "
-                                   f"New best score: {current_best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str} - "
-                                   f"n_est={params.get('n_estimators')}, "
-                                   f"depth={params.get('max_depth')}")
-                    elif (current_time - self.last_status_time) > 60:  # Log status every 60 seconds
-                        self.last_status_time = current_time
-                        logger.info(f"⏱️ Combination {self.current_iter}/{self.total_combinations} ({progress:.1f}%): "
-                                   f"Current best: {self.best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-            
-            callback = GridSearchCallback(total_combinations)
             
             search = GridSearchCV(
-                model, param_grid, cv=3, scoring='accuracy', n_jobs=-1, verbose=0,
-                callback=callback
+                model, param_grid, cv=3, scoring='accuracy', n_jobs=-1, verbose=1
             )
             
             search.fit(X, y)
@@ -1253,55 +924,9 @@ class EnhancedMLTrainer:
             model = RandomForestRegressor(random_state=42, n_jobs=-1)
             logger.info("🔍 Running Randomized Search with 50 iterations...")
             
-            # Create a callback class to handle verbose logging
-            class VerboseCallback:
-                def __init__(self, n_iter=50):
-                    self.n_iter = n_iter
-                    self.current_iter = 0
-                    self.best_score = -np.inf
-                    self.start_time = time.time()
-                    self.last_status_time = time.time()
-                
-                def __call__(self, cv_results):
-                    self.current_iter += 1
-                    
-                    current_best_idx = np.argmax(cv_results['mean_test_score'])
-                    current_best_score = cv_results['mean_test_score'][current_best_idx]
-                    
-                    # Calculate progress and time estimates
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    elapsed_str = str(timedelta(seconds=int(elapsed)))
-                    
-                    # Calculate ETA
-                    avg_time_per_iter = elapsed / self.current_iter
-                    remaining_iters = self.n_iter - self.current_iter
-                    eta = avg_time_per_iter * remaining_iters
-                    eta_str = str(timedelta(seconds=int(eta)))
-                    
-                    # Calculate progress percentage
-                    progress = (self.current_iter / self.n_iter) * 100
-                    
-                    if current_best_score > self.best_score:
-                        self.best_score = current_best_score
-                        params = cv_results['params'][current_best_idx]
-                        logger.info(f"🚀 Iteration {self.current_iter}/{self.n_iter} ({progress:.1f}%): "
-                                   f"New best R² score: {current_best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str} - "
-                                   f"n_est={params.get('n_estimators')}, "
-                                   f"depth={params.get('max_depth')}")
-                    elif (current_time - self.last_status_time) > 60:  # Log status every 60 seconds
-                        self.last_status_time = current_time
-                        logger.info(f"⏱️ Iteration {self.current_iter}/{self.n_iter} ({progress:.1f}%): "
-                                   f"Current best R²: {self.best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-            
-            callback = VerboseCallback(n_iter=50)
-            
             search = RandomizedSearchCV(
                 model, param_dist, n_iter=50, cv=3, 
-                scoring='r2', random_state=42, n_jobs=-1, verbose=0,
-                callback=callback
+                scoring='r2', random_state=42, n_jobs=-1, verbose=1
             )
             
             search.fit(X, y)
@@ -1325,57 +950,9 @@ class EnhancedMLTrainer:
             }
             
             model = RandomForestRegressor(random_state=42, n_jobs=-1)
-            total_combinations = np.prod([len(v) for v in param_grid.values()])
-            logger.info(f"🔍 Running Grid Search with {total_combinations} combinations...")
-            
-            # Create custom callback for verbose logging
-            class GridSearchCallback:
-                def __init__(self, total_combinations):
-                    self.total_combinations = total_combinations
-                    self.current_iter = 0
-                    self.best_score = -np.inf
-                    self.start_time = time.time()
-                    self.last_status_time = time.time()
-                
-                def __call__(self, cv_results):
-                    self.current_iter += 1
-                    
-                    current_best_idx = np.argmax(cv_results['mean_test_score'])
-                    current_best_score = cv_results['mean_test_score'][current_best_idx]
-                    
-                    # Calculate progress and time estimates
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    elapsed_str = str(timedelta(seconds=int(elapsed)))
-                    
-                    # Calculate ETA
-                    avg_time_per_iter = elapsed / self.current_iter
-                    remaining_iters = self.total_combinations - self.current_iter
-                    eta = avg_time_per_iter * remaining_iters
-                    eta_str = str(timedelta(seconds=int(eta)))
-                    
-                    # Calculate progress percentage
-                    progress = (self.current_iter / self.total_combinations) * 100
-                    
-                    if current_best_score > self.best_score:
-                        self.best_score = current_best_score
-                        params = cv_results['params'][current_best_idx]
-                        logger.info(f"🚀 Combination {self.current_iter}/{self.total_combinations} ({progress:.1f}%): "
-                                   f"New best R² score: {current_best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str} - "
-                                   f"n_est={params.get('n_estimators')}, "
-                                   f"depth={params.get('max_depth')}")
-                    elif (current_time - self.last_status_time) > 60:  # Log status every 60 seconds
-                        self.last_status_time = current_time
-                        logger.info(f"⏱️ Combination {self.current_iter}/{self.total_combinations} ({progress:.1f}%): "
-                                   f"Current best R²: {self.best_score:.4f} - "
-                                   f"Elapsed: {elapsed_str}, ETA: {eta_str}")
-            
-            callback = GridSearchCallback(total_combinations)
             
             search = GridSearchCV(
-                model, param_grid, cv=3, scoring='r2', n_jobs=-1, verbose=0,
-                callback=callback
+                model, param_grid, cv=3, scoring='r2', n_jobs=-1, verbose=1
             )
             
             search.fit(X, y)
@@ -1494,24 +1071,3 @@ class EnhancedMLTrainer:
         logger.info(f"⏱️ Total Saving Time: {total_elapsed:.2f}s")
         logger.info(f"⏱️ Time Breakdown: Models({models_elapsed:.1f}s) + Scalers({scalers_elapsed:.1f}s) + Encoders({encoders_elapsed:.1f}s)")
         logger.info(f"📁 Saved to directory: {models_dir}")
-
-
-def train_enhanced_grade_classifier(df: pd.DataFrame) -> Tuple[object, object]:
-    """Wrapper for backward compatibility"""
-    trainer = EnhancedMLTrainer(use_gpu=True, optimization_method='bayesian')
-    return trainer.train_enhanced_grade_classifier(df)
-
-def train_enhanced_composition_predictor(df: pd.DataFrame) -> Tuple[object, object]:
-    """Wrapper for backward compatibility"""
-    trainer = EnhancedMLTrainer(use_gpu=True, optimization_method='bayesian')
-    return trainer.train_enhanced_composition_predictor(df)
-
-def train_enhanced_confidence_estimator(df: pd.DataFrame) -> object:
-    """Wrapper for backward compatibility"""
-    trainer = EnhancedMLTrainer(use_gpu=True, optimization_method='bayesian')
-    return trainer.train_enhanced_confidence_estimator(df)
-
-def train_enhanced_success_predictor(df: pd.DataFrame) -> object:
-    """Wrapper for backward compatibility"""
-    trainer = EnhancedMLTrainer(use_gpu=True, optimization_method='bayesian')
-    return trainer.train_enhanced_success_predictor(df)
