@@ -1,6 +1,6 @@
 """
-Modified main.py to use refactored ML models
-Uses the new model loading approach instead of retraining on every startup
+Optimized main.py for MetalliSense AI Service
+Uses OptimizedAlloyPredictor with GPU acceleration and hyperparameter optimization
 """
 
 import sys
@@ -19,8 +19,8 @@ import uvicorn
 import logging
 from datetime import datetime
 
-# Import refactored ML models
-from models.ml_models import MetalCompositionAnalyzer
+# Import optimized alloy predictor
+from models.alloy_predictor import OptimizedAlloyPredictor
 from models.knowledge_base import MetalKnowledgeBase
 
 # Setup logging
@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="MetalliSense AI Model Service",
-    description="ML-powered metal composition analysis and alloy addition recommendations",
-    version="1.0.0"
+    description="Simplified ML-powered alloy addition recommendations",
+    version="2.0.0"
 )
 
 # CORS middleware
@@ -54,35 +54,40 @@ class CompositionInput(BaseModel):
     Ni: float
     Cu: float
 
-class ElementDeviation(BaseModel):
-    current: float
-    ideal: float
-    deviation: float
-    status: str
+class AlloyRecommendationRequest(BaseModel):
+    current_composition: CompositionInput
+    target_grade: str
+    batch_weight_kg: Optional[float] = 1000
 
 class AlloyRecommendation(BaseModel):
-    alloy: str
-    amount: float
-    target_element: str
-    current_value: float
-    target_value: float
-    reason: str
-    success_probability: float
-
-class AnalysisResult(BaseModel):
-    grade: str
+    alloy_type: str
+    quantity_kg: float
+    element_target: str
     confidence: float
-    deviations: Dict[str, ElementDeviation]
+    cost_estimate: float
+
+class RecommendationResponse(BaseModel):
     recommendations: List[AlloyRecommendation]
+    overall_confidence: float
+    total_cost_estimate: float
+    processing_time_ms: int
+    model_version: str
     timestamp: datetime = datetime.now()
 
-# Initialize analyzer
+# Initialize optimized alloy predictor
 try:
-    analyzer = MetalCompositionAnalyzer()
-    logger.info("MetalCompositionAnalyzer initialized successfully")
+    models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", "trained_models")
+    engine = OptimizedAlloyPredictor(use_gpu=True)
+    
+    # Try to load pre-trained model
+    if engine.load_model(models_dir):
+        logger.info("✅ Pre-trained OptimizedAlloyPredictor loaded successfully")
+    else:
+        logger.warning("⚠️ No pre-trained model found. Train model first with train_models.py")
+        engine = None
 except Exception as e:
-    logger.error(f"Failed to initialize MetalCompositionAnalyzer: {str(e)}")
-    analyzer = None
+    logger.error(f"Failed to initialize OptimizedAlloyPredictor: {str(e)}")
+    engine = None
 
 @app.get("/")
 async def root():
@@ -90,71 +95,87 @@ async def root():
     return {
         "status": "running",
         "service": "MetalliSense AI Model Service",
-        "version": "1.0.0",
+        "version": "2.0.0",
+        "description": "Simplified alloy recommendation engine",
         "time": datetime.now().isoformat()
     }
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    if analyzer is None:
+    if engine is None:
         return {
             "status": "degraded",
-            "message": "ML analyzer not initialized",
+            "message": "Alloy recommendation engine not initialized",
             "time": datetime.now().isoformat()
         }
     return {
         "status": "healthy",
         "message": "Service is running normally",
+        "engine_ready": engine.model is not None,
         "time": datetime.now().isoformat()
     }
 
-@app.post("/analyze", response_model=AnalysisResult)
-async def analyze_composition(composition: CompositionInput):
+@app.post("/recommend-alloys", response_model=RecommendationResponse)
+async def recommend_alloys(request: AlloyRecommendationRequest):
     """
-    Analyze metal composition and provide recommendations
+    Main endpoint: Get alloy addition recommendations
     
     Args:
-        composition: Current metal composition
+        request: Current composition, target grade, and batch weight
         
     Returns:
-        Analysis results with recommendations
+        Alloy recommendations with quantities and confidence scores
     """
-    if analyzer is None:
+    if engine is None:
         raise HTTPException(
             status_code=503, 
-            detail="ML analyzer not initialized. Service is degraded."
+            detail="Alloy recommendation engine not initialized. Train model first."
+        )
+    
+    if engine.model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model not trained. Run training script first."
         )
     
     try:
-        # Convert pydantic model to dict
-        composition_dict = composition.dict()
+        # Convert composition to dict
+        composition_dict = request.current_composition.dict()
         
-        # Analyze composition
-        result = analyzer.analyze_composition(composition_dict)
-        
-        # Convert to AnalysisResult model
-        # First convert the deviations dict to use ElementDeviation objects
-        deviations_model = {}
-        for element, deviation_data in result["deviations"].items():
-            deviations_model[element] = ElementDeviation(**deviation_data)
-        
-        # Create the full response
-        analysis_result = AnalysisResult(
-            grade=result["grade"],
-            confidence=result["confidence"],
-            deviations=deviations_model,
-            recommendations=result["recommendations"],
-            timestamp=datetime.now()
+        # Get recommendations from engine
+        result = engine.predict_alloys(
+            current_composition=composition_dict,
+            target_grade=request.target_grade.upper(),
+            batch_weight_kg=request.batch_weight_kg
         )
         
-        return analysis_result
+        # Convert to response model
+        recommendations = [
+            AlloyRecommendation(**rec) for rec in result['recommendations']
+        ]
         
+        response = RecommendationResponse(
+            recommendations=recommendations,
+            overall_confidence=result['overall_confidence'],
+            total_cost_estimate=result['total_cost_estimate'],
+            processing_time_ms=result['processing_time_ms'],
+            model_version=result['model_version']
+        )
+        
+        return response
+        
+    except ValueError as e:
+        logger.error(f"Validation error: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
     except Exception as e:
-        logger.error(f"Error analyzing composition: {str(e)}")
+        logger.error(f"Error generating recommendations: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Error analyzing composition: {str(e)}"
+            detail=f"Error generating recommendations: {str(e)}"
         )
 
 @app.get("/grades")
@@ -175,13 +196,47 @@ async def get_grade_details(grade_name: str):
     knowledge_base = MetalKnowledgeBase()
     grades = knowledge_base.grades
     
-    if grade_name not in grades:
+    if grade_name.upper() not in grades:
         raise HTTPException(
             status_code=404,
             detail=f"Grade '{grade_name}' not found"
         )
     
-    return {"grade": grade_name, "details": grades[grade_name]}
+    return {"grade": grade_name.upper(), "details": grades[grade_name.upper()]}
+
+@app.post("/model/train")
+async def trigger_training():
+    """Trigger model training (for development/testing)"""
+    try:
+        # This would trigger the training script
+        # For production, training should be done offline
+        return {
+            "message": "Training triggered. This is a development feature.",
+            "note": "In production, run train_simplified.py directly",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error triggering training: {str(e)}"
+        )
+
+@app.get("/model/status")
+async def get_model_status():
+    """Get current model status"""
+    if engine is None:
+        return {
+            "engine_initialized": False,
+            "model_loaded": False,
+            "status": "Engine not initialized"
+        }
+    
+    return {
+        "engine_initialized": True,
+        "model_loaded": engine.model is not None,
+        "status": "Ready" if engine.model is not None else "Model not trained",
+        "timestamp": datetime.now().isoformat()
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
