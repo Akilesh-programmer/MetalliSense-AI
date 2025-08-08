@@ -20,6 +20,7 @@ class AdvancedCopperEnhancer:
     
     def __init__(self):
         self.copper_pca = None
+        self.pca_copper_cols = None
         self.poly_features = None
         self.copper_isolation_forest = None
     
@@ -215,16 +216,42 @@ class AdvancedCopperEnhancer:
         
         if len(copper_cols) < 2 or len(df) < 2 or max_components < 2:
             logger.warning(f"   ⚠️ Insufficient data for PCA (features: {len(copper_cols)}, samples: {len(df)})")
-            return df
+            # Create dummy PCA features with zeros for consistency
+            df_enhanced = df.copy()
+            for i in range(n_components):
+                df_enhanced[f'Cu_PCA_{i+1}'] = 0.0
+            return df_enhanced
         
-        self.copper_pca = PCA(n_components=max_components, random_state=42)
-        copper_data = df[copper_cols].fillna(0)
-        
-        pca_features = self.copper_pca.fit_transform(copper_data)
+        # Check if this is training (fitting) or prediction (transform only)
+        if self.copper_pca is None:
+            # Training phase - fit PCA
+            self.copper_pca = PCA(n_components=max_components, random_state=42)
+            self.pca_copper_cols = copper_cols
+            copper_data = df[copper_cols].fillna(0)
+            pca_features = self.copper_pca.fit_transform(copper_data)
+            
+            explained_variance = self.copper_pca.explained_variance_ratio_.sum()
+            logger.info(f"   🔄 PCA explains {explained_variance:.1%} of copper feature variance")
+        else:
+            # Prediction phase - use fitted PCA
+            # Ensure we have the same columns as during training
+            missing_cols = set(self.pca_copper_cols) - set(copper_cols)
+            if missing_cols:
+                for col in missing_cols:
+                    df[col] = 0.0
+            
+            copper_data = df[self.pca_copper_cols].fillna(0)
+            pca_features = self.copper_pca.transform(copper_data)
         
         df_enhanced = df.copy()
-        for i in range(max_components):
+        for i in range(pca_features.shape[1]):
             df_enhanced[f'Cu_PCA_{i+1}'] = pca_features[:, i]
+        
+        # Fill missing PCA components with zeros if needed
+        for i in range(pca_features.shape[1], n_components):
+            df_enhanced[f'Cu_PCA_{i+1}'] = 0.0
+        
+        return df_enhanced
         
         explained_variance = self.copper_pca.explained_variance_ratio_.sum()
         logger.info(f"   🔄 PCA explains {explained_variance:.1%} of copper feature variance")

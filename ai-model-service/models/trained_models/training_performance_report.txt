@@ -1,9 +1,9 @@
 ================================================================================
 METALLISENSE AI - PRODUCTION MODEL PERFORMANCE REPORT
 ================================================================================
-Generated: 2025-08-08 12:26:48
+Generated: 2025-08-08 14:11:06
 Model Architecture: Multi-Model Ensemble with Copper Optimization
-Training Time: 479.1 seconds (8.0 minutes)
+Training Time: 425.3 seconds (7.1 minutes)
 Data Type: Synthetic
 GPU Acceleration: ENABLED
 
@@ -26,8 +26,8 @@ ARCHITECTURE IMPROVEMENTS:
 
 MODEL PERFORMANCE:
 ================================================================================
-📊 Overall R² Score: 0.5117 ✅ PRODUCTION READY
-📊 Copper R² Score: 0.9155 ✅ EXCELLENT
+📊 Overall R² Score: 0.5143 ✅ PRODUCTION READY
+📊 Copper R² Score: 0.9156 ✅ EXCELLENT
 📊 Training Samples: Enhanced with copper-specific augmentation
 📊 Advanced Features: 40+ copper-specific features engineered
 
@@ -35,7 +35,7 @@ INDIVIDUAL ALLOY PERFORMANCE:
 ================================================================================
 
 CHROMIUM:
-  R² Score: 0.9556 ✅ EXCELLENT
+  R² Score: 0.9560 ✅ EXCELLENT
   Training R²: 0.9620
   Validation R²: 0.9458
   MSE: 0.00
@@ -43,7 +43,7 @@ CHROMIUM:
   Overfitting Ratio: 0.98 ✅ Excellent
 
 NICKEL:
-  R² Score: 0.9369 ✅ EXCELLENT
+  R² Score: 0.9375 ✅ EXCELLENT
   Training R²: 0.9403
   Validation R²: 0.9244
   MSE: 0.00
@@ -51,7 +51,7 @@ NICKEL:
   Overfitting Ratio: 0.98 ✅ Excellent
 
 MOLYBDENUM:
-  R² Score: 0.9439 ✅ EXCELLENT
+  R² Score: 0.9443 ✅ EXCELLENT
   Training R²: 0.9508
   Validation R²: 0.9335
   MSE: 0.00
@@ -59,7 +59,7 @@ MOLYBDENUM:
   Overfitting Ratio: 0.98 ✅ Excellent
 
 COPPER:
-  R² Score: 0.9155 ✅ EXCELLENT
+  R² Score: 0.9156 ✅ EXCELLENT
   Training R²: 0.9183
   Validation R²: 0.9128
   MSE: 0.00
@@ -67,7 +67,7 @@ COPPER:
   Overfitting Ratio: 0.99 ✅ Excellent
 
 ALUMINUM:
-  R² Score: 0.0783 ✅ STABLE
+  R² Score: 0.0822 ✅ STABLE
   Training R²: 0.1687
   Validation R²: 0.0097
   MSE: 0.00
@@ -75,7 +75,7 @@ ALUMINUM:
   Overfitting Ratio: 0.06 ⚠️ Monitor
 
 TITANIUM:
-  R² Score: 0.1074 ✅ STABLE
+  R² Score: 0.1132 ✅ STABLE
   Training R²: 0.1676
   Validation R²: 0.0109
   MSE: 0.00
@@ -83,7 +83,7 @@ TITANIUM:
   Overfitting Ratio: 0.07 ⚠️ Monitor
 
 VANADIUM:
-  R² Score: 0.0803 ✅ STABLE
+  R² Score: 0.0857 ✅ STABLE
   Training R²: 0.1691
   Validation R²: 0.0069
   MSE: 0.00
@@ -91,7 +91,7 @@ VANADIUM:
   Overfitting Ratio: 0.04 ⚠️ Monitor
 
 NIOBIUM:
-  R² Score: 0.0757 ✅ STABLE
+  R² Score: 0.0797 ✅ STABLE
   Training R²: 0.1747
   Validation R²: 0.0081
   MSE: 0.00
@@ -109,7 +109,7 @@ MODEL ASSESSMENT:
 
 COPPER OPTIMIZATION RESULTS:
 ================================================================================
-🎯 Copper R² Achievement: 0.9155
+🎯 Copper R² Achievement: 0.9156
 🎯 Overfitting Control: 0.994
 🎯 Feature Count: 35 optimized features
 
