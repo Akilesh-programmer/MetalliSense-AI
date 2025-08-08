@@ -18,8 +18,9 @@ python train_enhanced_models.py
 After training, this directory will contain:
 
 ### Model Files (.pkl)
+
 - `aluminum_model.pkl` - Aluminum alloy prediction model
-- `chromium_model.pkl` - Chromium alloy prediction model  
+- `chromium_model.pkl` - Chromium alloy prediction model
 - `copper_model.pkl` - **Enhanced copper model** (32% improvement)
 - `molybdenum_model.pkl` - Molybdenum alloy prediction model
 - `nickel_model.pkl` - Nickel alloy prediction model
@@ -28,12 +29,14 @@ After training, this directory will contain:
 - `vanadium_model.pkl` - Vanadium alloy prediction model
 
 ### Preprocessing Files (.pkl)
+
 - `feature_selectors.pkl` - Feature selection transformers
 - `model_scalers.pkl` - Data scaling transformers
 - `data_preprocessor.pkl` - Data preprocessing pipeline
 - `grade_encoder.pkl` - Metal grade encoding
 
 ### Training Reports
+
 - `training_performance_report.txt` - Model performance metrics
 - `training_history.json` - Training process history
 
