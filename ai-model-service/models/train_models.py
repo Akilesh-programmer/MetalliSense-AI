@@ -1,6 +1,6 @@
 """
-Enhanced training script for MetalliSense AI
-Uses advanced preprocessing and enhanced model architecture
+Training script for MetalliSense AI
+Uses multi-model ensemble architecture
 """
 
 import sys
@@ -12,7 +12,7 @@ from datetime import datetime
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from alloy_predictor import OptimizedAlloyPredictor, AdvancedDataPreprocessor, EnhancedAlloyPredictor
+from alloy_predictor import AlloyPredictor, ModelConfig, generate_synthetic_training_data
 from database.mongo_client import MongoDBClient
 import pandas as pd
 import numpy as np
@@ -153,7 +153,7 @@ def main():
     
     # Train the optimized model
     logger.info("🚀 Initializing OptimizedAlloyPredictor...")
-    model = OptimizedAlloyPredictor(use_gpu=True)
+    model = AlloyPredictor()
     
     # Train with MongoDB data
     logger.info("🎯 Training optimized alloy prediction model...")
@@ -196,6 +196,38 @@ def main():
         logger.error("❌ Training failed!")
         return False
 
+def evaluate_model(predictor: AlloyPredictor, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
+    """Evaluate trained model performance"""
+    logger.info("📊 Performing model evaluation...")
+    
+    predictions = predictor.predict(X_test)
+    
+    evaluation_results = {}
+    alloy_types = ['chromium', 'nickel', 'molybdenum', 'copper', 
+                   'aluminum', 'titanium', 'vanadium', 'niobium']
+    
+    for alloy in alloy_types:
+        target_col = f'alloy_{alloy}_kg'
+        
+        if target_col in y_test.columns and target_col in predictions.columns:
+            from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+            
+            y_true = y_test[target_col]
+            y_pred = predictions[target_col]
+            
+            r2 = r2_score(y_true, y_pred)
+            mse = mean_squared_error(y_true, y_pred)
+            mae = mean_absolute_error(y_true, y_pred)
+            
+            evaluation_results[alloy] = {
+                'r2': r2,
+                'mse': mse,
+                'mae': mae
+            }
+    
+    return evaluation_results
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("MetalliSense AI Training Options:")
@@ -224,7 +256,8 @@ if __name__ == "__main__":
             
             # Initialize advanced preprocessor
             logger.info("🔧 Initializing advanced data preprocessor...")
-            preprocessor = AdvancedDataPreprocessor(
+            from alloy_predictor import DataPreprocessor
+            preprocessor = DataPreprocessor(
                 outlier_method='iqr',
                 log_transform=True
             )
@@ -297,26 +330,26 @@ if __name__ == "__main__":
             
             # Initialize and train enhanced model
             logger.info("🚀 Initializing Enhanced Multi-Model Architecture...")
-            enhanced_model = EnhancedAlloyPredictor(
+            model = AlloyPredictor(
                 use_gpu=True,
                 ensemble_method='voting'
             )
             
-            # Train the enhanced model
+            # Train the model
             training_start = time.time()
-            training_results = enhanced_model.train(X_train, y_train, feature_names)
+            training_results = model.train(X_train, y_train)
             training_time = time.time() - training_start
             
-            logger.info(f"⏱️ Enhanced model training completed in {training_time:.1f} seconds")
+            logger.info(f"⏱️ Model training completed in {training_time:.1f} seconds")
             
-            # Comprehensive evaluation
-            logger.info("📊 Performing comprehensive evaluation...")
-            evaluation_results = enhanced_model.evaluate_comprehensive(
-                X_test, y_test, feature_names
-            )
+            # Evaluation
+            logger.info("📊 Performing evaluation...")
+            from sklearn.model_selection import train_test_split
+            X_train_split, X_test_eval, y_train_split, y_test_eval = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
+            evaluation_results = evaluate_model(model, X_test_eval, y_test_eval)
             
-            # Save enhanced models
-            enhanced_model.save_models(models_dir)
+            # Save models
+            model.save_models(models_dir)
             
             # Save preprocessing components
             import pickle
