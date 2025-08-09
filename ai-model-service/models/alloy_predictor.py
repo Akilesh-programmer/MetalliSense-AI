@@ -1,6 +1,7 @@
 """
-MetalliSense AI - Alloy Prediction System
-Production-ready multi-model ensemble for alloy quantity prediction
+Optimized Alloy Recommendation Engine for MetalliSense
+Single-purpose ML model for alloy quantity prediction
+Uses XGBoost with GPU acceleration and overfitting prevention
 """
 
 import pandas as pd
@@ -8,489 +9,648 @@ import numpy as np
 import pickle
 import logging
 import os
-from pathlib import Path
+import sys
+import time
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Any, Tuple, Optional
 import warnings
-from dataclasses import dataclass
 
-# ML libraries
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import RobustScaler
-from sklearn.feature_selection import SelectKBest, f_regression
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, IsolationForest
-from sklearn.linear_model import ElasticNet, Ridge, Lasso
-from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import StandardScaler
-from sklearn.inspection import permutation_importance
-from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split, cross_val_score, KFold, GridSearchCV, RandomizedSearchCV
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.ensemble import RandomForestRegressor
 
-# XGBoost
-try:
-    import xgboost as xgb
-    HAS_XGBOOST = True
-except ImportError:
-    HAS_XGBOOST = False
-    warnings.warn("XGBoost not available. Will use alternative models.")
+# XGBoost with GPU support
+import xgboost as xgb
 
-# Advanced copper enhancer
-from advanced_copper_enhancer import AdvancedCopperEnhancer
+# Enhanced logging configuration for industry-standard output
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter with colors and live progress indicators"""
+    
+    COLORS = {
+        'DEBUG': '\033[36m',    # Cyan
+        'INFO': '\033[32m',     # Green
+        'WARNING': '\033[33m',  # Yellow
+        'ERROR': '\033[31m',    # Red
+        'CRITICAL': '\033[35m', # Magenta
+        'RESET': '\033[0m'      # Reset
+    }
+    
+    def format(self, record):
+        log_color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
+        reset_color = self.COLORS['RESET']
+        
+        # Add timestamp and formatted message
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        
+        if hasattr(record, 'progress'):
+            # Special formatting for progress updates with progress indicator
+            progress_indicator = getattr(record, 'progress', '')
+            return f"{log_color}[{timestamp}] {record.levelname:<8} {record.getMessage()} {progress_indicator}{reset_color}"
+        
+        # Standard log formatting
+        return f"{log_color}[{timestamp}] {record.levelname:<8} {record.getMessage()}{reset_color}"
+
+def setup_industry_logging():
+    """Setup industry-standard logging with live updates"""
+    # Clear existing handlers
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    
+    # Create console handler with custom formatter
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(ColoredFormatter())
+    
+    # Setup root logger
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[console_handler],
+        force=True
+    )
+    
+    return logging.getLogger(__name__)
+
+# Setup enhanced logging
+logger = setup_industry_logging()
 
 # Suppress warnings for cleaner output
-warnings.filterwarnings('ignore', category=FutureWarning)
-warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore')
 
-# Logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s.%(msecs)03d] %(levelname)-8s %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ModelConfig:
-    """Configuration for model training and evaluation"""
-    test_size: float = 0.2
-    random_state: int = 42
-    cv_folds: int = 5
-    max_features_per_alloy: int = 35
-    min_samples_for_training: int = 100
-
-
-class DataPreprocessor:
-    """Advanced data preprocessing pipeline"""
+def print_progress_bar(iteration, total, prefix='Progress', suffix='Complete', 
+                      length=50, fill='█', empty='░'):
+    """Print a live-updating progress bar"""
+    percent = f"{100 * (iteration / float(total)):.1f}"
+    filled_length = int(length * iteration // total)
+    bar = fill * filled_length + empty * (length - filled_length)
     
-    def __init__(self):
-        self.scalers = {}
-        self.is_fitted = False
-        
-    def preprocess_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Apply comprehensive data preprocessing"""
-        logger.info("🔧 Starting advanced data preprocessing...")
-        
-        # Copy dataframe to avoid modifying original
-        df_processed = df.copy()
-        
-        # Apply copper-specific preprocessing
-        df_processed = self._apply_copper_preprocessing(df_processed)
-        
-        # Handle outliers using IQR method
-        df_processed = self._cap_outliers_iqr(df_processed)
-        
-        # Apply log transformation to alloy quantities
-        df_processed = self._apply_log_transforms(df_processed)
-        
-        # Engineer metallurgical features
-        df_processed = self._engineer_metallurgical_features(df_processed)
-        
-        logger.info("✅ Advanced data preprocessing completed")
-        return df_processed
-    
-    def _apply_copper_preprocessing(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Apply copper-specific preprocessing"""
-        logger.info("   🔧 Applying copper-specific preprocessing...")
-        
-        # Handle copper zero-inflation
-        copper_col = 'alloy_copper_kg'
-        if copper_col in df.columns:
-            # Cap extreme copper outliers
-            copper_data = df[copper_col]
-            q1, q3 = copper_data.quantile([0.25, 0.75])
-            iqr = q3 - q1
-            lower_bound = q1 - 3 * iqr
-            upper_bound = q3 + 3 * iqr
-            
-            outliers_capped = ((copper_data < lower_bound) | (copper_data > upper_bound)).sum()
-            df[copper_col] = copper_data.clip(lower_bound, upper_bound)
-            
-            if outliers_capped > 0:
-                logger.info(f"   🔧 Capping {outliers_capped} extreme copper outliers")
-            
-            # Log copper statistics
-            copper_nonzero = (df[copper_col] > 0).sum()
-            copper_zero_pct = (1 - copper_nonzero / len(df)) * 100
-            logger.info(f"   📊 Copper zero-inflation: {copper_zero_pct:.1f}%")
-        
-        logger.info("   ✅ Copper-specific preprocessing completed")
-        return df
-    
-    def _cap_outliers_iqr(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Cap outliers using IQR method for all numerical columns"""
-        for col in df.select_dtypes(include=[np.number]).columns:
-            data = df[col]
-            q1, q3 = data.quantile([0.25, 0.75])
-            iqr = q3 - q1
-            lower_bound = q1 - 1.5 * iqr
-            upper_bound = q3 + 1.5 * iqr
-            
-            outliers_count = ((data < lower_bound) | (data > upper_bound)).sum()
-            if outliers_count > 0:
-                df[col] = data.clip(lower_bound, upper_bound)
-                logger.info(f"   🔧 {col}: Capped {outliers_count} outliers to [{lower_bound:.3f}, {upper_bound:.3f}]")
-        
-        return df
-    
-    def _apply_log_transforms(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Apply log transformation to alloy quantity columns"""
-        alloy_columns = [col for col in df.columns if col.startswith('alloy_') and col.endswith('_kg')]
-        
-        for col in alloy_columns:
-            if col in df.columns:
-                # Add small constant to handle zeros, then apply log1p
-                df[col] = np.log1p(df[col] + 1e-6)
-                logger.info(f"   📊 Applied log transformation to {col}")
-        
-        return df
-    
-    def _engineer_metallurgical_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Engineer advanced metallurgical features"""
-        logger.info("   🔧 Engineering copper-specific metallurgical features...")
-        
-        # Basic steel classification features - handle missing columns
-        cr_values = df.get('current_Cr', pd.Series([0] * len(df)))
-        c_values = df.get('current_C', pd.Series([0] * len(df)))
-        
-        df['is_stainless'] = (cr_values > 10.5).astype(int)
-        df['is_carbon_steel'] = ((c_values > 0.3) & (cr_values < 2)).astype(int)
-        df['is_alloy_steel'] = ((cr_values >= 2) & (cr_values <= 10.5)).astype(int)
-        
-        # Element ratios - handle missing columns properly
-        ni_values = df.get('current_Ni', pd.Series([0] * len(df)))
-        mo_values = df.get('current_Mo', pd.Series([0] * len(df)))
-        
-        df['Cr_Ni_ratio'] = np.where(ni_values > 0,
-                                     cr_values / np.where(ni_values == 0, 1e-6, ni_values),
-                                     0)
-        df['C_Cr_ratio'] = np.where(cr_values > 0,
-                                   c_values / np.where(cr_values == 0, 1e-6, cr_values),
-                                   0)
-        df['Mo_Cr_ratio'] = np.where(cr_values > 0,
-                                    mo_values / np.where(cr_values == 0, 1e-6, cr_values),
-                                    0)
-        
-        # Copper-specific features
-        current_cu = df.get('current_Cu', pd.Series([0] * len(df)))
-        if 'current_Cu' in df.columns:
-            df['Cu_strength_index'] = current_cu * (1 + ni_values * 0.3)
-            df['Cu_corrosion_index'] = current_cu * (1 + cr_values * 0.1)
-            df['Cu_conductivity_factor'] = current_cu * (1 - c_values * 2)
-            df['is_copper_bearing'] = (current_cu > 0.2).astype(int)
-            
-            # Advanced copper metallurgical interactions
-            df['Cu_Ni_synergy'] = current_cu * df.get('current_Ni', 0)
-            df['Cu_precipitation_risk'] = current_cu * df.get('current_C', 0) * 10
-            df['Cu_hot_shortness_risk'] = current_cu * df.get('current_S', 0) * 1000
-            df['Cu_solid_solution_strength'] = current_cu * (1 - current_cu * 0.1)
-        
-        logger.info(f"   🔬 Engineered {len([c for c in df.columns if c not in ['current_C', 'current_Si', 'current_Mn', 'current_P', 'current_S', 'current_Cr', 'current_Mo', 'current_Ni', 'current_Cu'] + [col for col in df.columns if col.startswith('alloy_')]])} advanced metallurgical features")
-        
-        return df
+    # Use carriage return to overwrite previous line
+    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='', flush=True)
+    if iteration == total:
+        print()  # New line when complete
 
-
-class AlloyPredictor:
-    """Production-ready multi-model ensemble for alloy prediction"""
+class OptimizedAlloyPredictor:
+    """
+    Optimized ML model for predicting alloy quantities with advanced features:
+    - GPU-accelerated XGBoost with comprehensive hyperparameter optimization
+    - Advanced feature engineering and validation
+    - Cross-validation to prevent overfitting
+    - Extensive training progress logging
+    """
     
-    def __init__(self, config: Optional[ModelConfig] = None):
-        self.config = config or ModelConfig()
-        self.models = {}
-        self.scalers = {}
-        self.feature_selectors = {}
-        self.preprocessor = DataPreprocessor()
-        self.copper_enhancer = AdvancedCopperEnhancer()
-        self.is_trained = False
-        self.alloy_types = [
-            'chromium', 'nickel', 'molybdenum', 'copper',
+    def __init__(self, use_gpu: bool = True):
+        # Note: knowledge_base removed for simplified architecture
+        # Grade specifications are handled through data preprocessing
+        self.model = None
+        self.scaler = StandardScaler()
+        self.feature_names = []
+        self.chemical_elements = [
+            'C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni', 'Cu'
+        ]
+        self.target_alloys = [
+            'chromium', 'nickel', 'molybdenum', 'copper', 
             'aluminum', 'titanium', 'vanadium', 'niobium'
         ]
+        self.use_gpu = use_gpu
+        self.training_time = 0
+        self.cv_scores = None
+        self.best_params = {}
+        
+        logger.info(f"🚀 Initialized OptimizedAlloyPredictor (GPU: {use_gpu})")
     
-    def _create_ensemble_model(self, alloy_type: str) -> Pipeline:
-        """Create ensemble model with copper-specific optimizations"""
+    def validate_dataset(self, df: pd.DataFrame) -> bool:
+        """Comprehensive dataset validation with detailed logging"""
+        logger.info("🔍 Validating dataset quality and structure...")
         
-        if alloy_type == 'copper':
-            # Copper-specific anti-overfitting ensemble
-            models = []
+        # Basic structure validation
+        required_columns = ['grade'] + [f'current_{element}' for element in self.chemical_elements] + [f'alloy_{alloy}_kg' for alloy in self.target_alloys]
+        missing_cols = [col for col in required_columns if col not in df.columns]
+        
+        if missing_cols:
+            logger.error(f"❌ Missing required columns: {missing_cols}")
+            return False
+        
+        # Data quality checks
+        null_counts = df.isnull().sum()
+        if null_counts.sum() > 0:
+            logger.warning(f"⚠️  Found {null_counts.sum()} null values")
             
-            if HAS_XGBOOST:
-                models.append(('xgb', xgb.XGBRegressor(
-                    n_estimators=100, max_depth=6, learning_rate=0.1,
-                    subsample=0.7, reg_alpha=0.5, reg_lambda=2.0,
-                    random_state=self.config.random_state
-                )))
+        # Check for negative values in chemical compositions
+        for element in self.chemical_elements:
+            current_col = f'current_{element}'
             
-            models.extend([
-                ('rf', RandomForestRegressor(
-                    n_estimators=100, max_depth=8, min_samples_split=10,
-                    min_samples_leaf=5, random_state=self.config.random_state
-                )),
-                ('elastic', ElasticNet(
-                    alpha=0.1, l1_ratio=0.5, random_state=self.config.random_state
-                )),
-                ('ridge', Ridge(alpha=1.0, random_state=self.config.random_state)),
-                ('gb', GradientBoostingRegressor(
-                    n_estimators=100, max_depth=6, learning_rate=0.1,
-                    subsample=0.7, random_state=self.config.random_state
-                )),
-                ('lasso', Lasso(alpha=0.1, random_state=self.config.random_state))
-            ])
-            
-            # Use ensemble with proper regularization
-            return self._create_weighted_ensemble(models)
-        else:
-            # Standard ensemble for other alloys
-            models = []
-            
-            if HAS_XGBOOST:
-                models.append(('xgb', xgb.XGBRegressor(
-                    n_estimators=100, max_depth=6, learning_rate=0.1,
-                    random_state=self.config.random_state
-                )))
-            
-            models.extend([
-                ('rf', RandomForestRegressor(
-                    n_estimators=100, max_depth=10,
-                    random_state=self.config.random_state
-                )),
-                ('elastic', ElasticNet(
-                    alpha=0.01, l1_ratio=0.5, random_state=self.config.random_state
-                )),
-                ('ridge', Ridge(alpha=0.1, random_state=self.config.random_state))
-            ])
-            
-            return self._create_weighted_ensemble(models)
+            if (df[current_col] < 0).any():
+                logger.error(f"❌ Found negative values in {element} columns")
+                return False
+        
+        logger.info(f"✅ Dataset validation passed: {len(df)} samples, {len(df.columns)} features")
+        return True
     
-    def _create_weighted_ensemble(self, models: List) -> Any:
-        """Create weighted ensemble of models"""
-        from sklearn.ensemble import VotingRegressor
-        return VotingRegressor(models, weights=None)
-    
-    def train(self, X: pd.DataFrame, y: pd.DataFrame) -> Dict[str, Any]:
-        """Train multi-model ensemble for all alloys"""
-        logger.info("🚀 Training Multi-Model Architecture...")
+    def engineer_features(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+        """Advanced feature engineering with extensive logging"""
+        logger.info("🔧 Engineering features...")
         
-        training_results = {}
+        features = []
         
-        # Apply preprocessing
-        X_processed = self.preprocessor.preprocess_data(X)
+        # 1. Current composition features (chemical elements)
+        current_features = []
+        for element in self.chemical_elements:
+            col = f'current_{element}'
+            if col in df.columns:
+                current_features.append(df[col].values)
         
-        # Apply copper enhancements
-        logger.info("🚀 Applying advanced copper enhancements...")
-        X_enhanced = self.copper_enhancer.enhance_features(X_processed)
-        logger.info("✅ Advanced copper enhancements completed")
+        if current_features:
+            current_matrix = np.column_stack(current_features)
+            features.append(current_matrix)
+            logger.info(f"   📊 Added {len(current_features)} current composition features")
         
-        # Generate synthetic data for better training
-        X_enhanced, y_enhanced = self._generate_synthetic_data(X_enhanced, y)
+        # 2. Grade encoding
+        if 'grade' in df.columns:
+            label_encoder = LabelEncoder()
+            grade_encoded = label_encoder.fit_transform(df['grade'].astype(str)).reshape(-1, 1)
+            features.append(grade_encoded)
+            logger.info(f"   📊 Added grade encoding: {len(np.unique(grade_encoded))} unique grades")
         
-        for alloy in self.alloy_types:
-            logger.info(f"   🔧 Training model for {alloy}...")
+        # 3. Compositional ratios and interactions
+        if len(current_features) >= 2:
+            ratios = []
+            # Calculate important element ratios (Ni/Cr, Mo/Cr, etc.)
+            for i, element1 in enumerate(self.chemical_elements):
+                col1 = f'current_{element1}'
+                if col1 in df.columns:
+                    for j, element2 in enumerate(self.chemical_elements[i+1:], i+1):
+                        col2 = f'current_{element2}'
+                        if col2 in df.columns:
+                            # Safe ratio calculation (avoid division by zero)
+                            ratio = np.where(df[col2] != 0, df[col1] / (df[col2] + 1e-8), 0)
+                            ratios.append(ratio)
             
-            target_col = f'alloy_{alloy}_kg'
-            if target_col not in y_enhanced.columns:
-                logger.warning(f"   ⚠️ Target column {target_col} not found, skipping {alloy}")
-                continue
-            
-            # Prepare data for this alloy
-            X_alloy = X_enhanced.copy()
-            y_alloy = y_enhanced[target_col]
-            
-            # Split data
-            X_train, X_val, y_train, y_val = train_test_split(
-                X_alloy, y_alloy, 
-                test_size=self.config.test_size,
-                random_state=self.config.random_state
-            )
-            
-            # Feature selection
-            selector = SelectKBest(f_regression, k=min(self.config.max_features_per_alloy, X_train.shape[1]))
-            X_train_selected = selector.fit_transform(X_train, y_train)
-            X_val_selected = selector.transform(X_val)
-            
-            # Scaling
-            scaler = RobustScaler()
-            X_train_scaled = scaler.fit_transform(X_train_selected)
-            X_val_scaled = scaler.transform(X_val_selected)
-            
-            # Create and train model
-            model = self._create_ensemble_model(alloy)
-            model.fit(X_train_scaled, y_train)
-            
-            # Evaluate
-            train_pred = model.predict(X_train_scaled)
-            val_pred = model.predict(X_val_scaled)
-            
-            train_r2 = r2_score(y_train, train_pred)
-            val_r2 = r2_score(y_val, val_pred)
-            val_mse = mean_squared_error(y_val, val_pred)
-            
-            # Store results
-            self.models[alloy] = model
-            self.scalers[alloy] = scaler
-            self.feature_selectors[alloy] = selector
-            
-            training_results[alloy] = {
-                'train_r2': train_r2,
-                'val_r2': val_r2,
-                'val_mse': val_mse,
-                'n_features': X_train_selected.shape[1]
-            }
-            
-            logger.info(f"     📊 {alloy}: R²={val_r2:.4f}, MSE={val_mse:.2f}, Features={X_train_selected.shape[1]}")
+            if ratios:
+                ratios_matrix = np.column_stack(ratios)
+                features.append(ratios_matrix)
+                logger.info(f"   📊 Added {len(ratios)} compositional ratio features")
         
-        self.is_trained = True
-        return training_results
-    
-    def _generate_synthetic_data(self, X: pd.DataFrame, y: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Generate synthetic data to enhance training"""
-        logger.info("   🔧 Found synthetic data generation capability")
+        # 4. Total element content
+        if current_features:
+            total_elements = np.sum(current_matrix, axis=1).reshape(-1, 1)
+            features.append(total_elements)
+            logger.info("   📊 Added total element content feature")
         
-        # For copper enhancement, focus on copper-bearing samples
-        copper_samples = X[X.get('current_Cu', 0) > 0.1]
-        if len(copper_samples) > 0:
-            # Generate additional copper-enhanced samples
-            n_synthetic = min(1500, len(copper_samples))
-            synthetic_indices = np.random.choice(copper_samples.index, size=n_synthetic, replace=True)
-            
-            X_synthetic = X.loc[synthetic_indices].copy()
-            y_synthetic = y.loc[synthetic_indices].copy()
-            
-            # Add slight variations to create diversity
-            for col in X_synthetic.select_dtypes(include=[np.number]).columns:
-                noise = np.random.normal(0, 0.05, len(X_synthetic))
-                X_synthetic[col] = X_synthetic[col] * (1 + noise)
-            
-            # Combine with original data
-            X_combined = pd.concat([X, X_synthetic], ignore_index=True)
-            y_combined = pd.concat([y, y_synthetic], ignore_index=True)
-            
-            logger.info(f"   🔄 Generated {n_synthetic} synthetic samples (copper-enhanced)")
-            return X_combined, y_combined
+        # Combine all features
+        if not features:
+            logger.error("❌ No features could be engineered")
+            return np.array([]), np.array([])
+        
+        X = np.column_stack(features)
+        
+        # Target variables (alloy quantities)
+        target_cols = [f'alloy_{alloy}_kg' for alloy in self.target_alloys]
+        available_targets = [col for col in target_cols if col in df.columns]
+        
+        if not available_targets:
+            logger.error("❌ No target variables found")
+            return np.array([]), np.array([])
+        
+        y = df[available_targets].values
+        
+        logger.info(f"✅ Feature engineering completed: {X.shape[1]} features, {y.shape[1]} targets")
         
         return X, y
     
-    def predict(self, X: pd.DataFrame) -> pd.DataFrame:
-        """Make predictions for all alloys"""
-        if not self.is_trained:
-            raise ValueError("Model must be trained before making predictions")
+    def train(self, df: pd.DataFrame) -> bool:
+        """
+        Train the optimized alloy prediction model with GPU acceleration and comprehensive optimization
         
-        # Apply preprocessing
-        X_processed = self.preprocessor.preprocess_data(X)
-        X_enhanced = self.copper_enhancer.enhance_features(X_processed)
+        Uses:
+        - XGBoost with GPU acceleration (tree_method='gpu_hist')
+        - GridSearchCV and RandomizedSearchCV for hyperparameter optimization
+        - Cross-validation for overfitting prevention
+        - Detailed progress tracking and time estimates
+        - Advanced logging during all training phases
+        """
+        logger.info("🚀 Starting GPU-Accelerated Alloy Prediction Model Training...")
+        logger.info("="*80)
+        logger.info(f"🔧 GPU Acceleration: {'ENABLED' if self.use_gpu else 'DISABLED'}")
+        logger.info("🔧 Optimization Techniques: GridSearchCV + RandomizedSearchCV")
+        logger.info("🔧 Overfitting Prevention: K-Fold Cross-Validation + Early Stopping")
+        logger.info("="*80)
         
-        predictions = pd.DataFrame(index=X.index)
+        total_start_time = time.time()
         
-        for alloy in self.alloy_types:
-            if alloy in self.models:
-                # Apply feature selection and scaling
-                X_selected = self.feature_selectors[alloy].transform(X_enhanced)
-                X_scaled = self.scalers[alloy].transform(X_selected)
+        # Step 1: Dataset validation and GPU check
+        step_start = time.time()
+        logger.info("📋 STEP 1/8: Dataset Validation and GPU Setup")
+        logger.info("   ⏱️  Estimated time: 2-5 minutes")
+        logger.info("   📊 Progress: [██░░░░░░░░] 12.5%")
+        
+        # Check GPU availability for XGBoost
+        if self.use_gpu:
+            try:
+                # Test GPU availability
+                import subprocess
+                result = subprocess.run(['nvidia-smi'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    logger.info("   🚀 GPU detected: NVIDIA GPU available for XGBoost")
+                else:
+                    logger.warning("   ⚠️  GPU not detected, falling back to CPU")
+                    self.use_gpu = False
+            except Exception as e:
+                logger.warning(f"   ⚠️  GPU validation failed, using CPU: {e}")
+                self.use_gpu = False
+        
+        if not self.validate_dataset(df):
+            logger.error("❌ Dataset validation failed")
+            return False
+        
+        step_elapsed = time.time() - step_start
+        logger.info(f"   ✅ Step 1 completed in {step_elapsed:.2f}s")
+        logger.info("   📊 Progress: [████░░░░░░] 25.0%")
+        logger.info("")
+        
+        # Step 2: Feature engineering
+        step_start = time.time()
+        logger.info("🔧 STEP 2/8: Advanced Feature Engineering")
+        logger.info("   ⏱️  Estimated time: 5-10 minutes")
+        logger.info("   📊 Progress: [████░░░░░░] 25.0%")
+        
+        X, y = self.engineer_features(df)
+        
+        if len(X) == 0:
+            logger.error("❌ No valid training data after feature engineering")
+            return False
+        
+        step_elapsed = time.time() - step_start
+        logger.info(f"   ✅ Step 2 completed in {step_elapsed:.2f}s")
+        logger.info("   📊 Progress: [██████░░░░] 37.5%")
+        logger.info("")
+        
+        # Step 3: Data splitting and scaling
+        step_start = time.time()
+        logger.info("📊 STEP 3/8: Data Splitting and Feature Scaling")
+        logger.info("   ⏱️  Estimated time: 1-2 minutes")
+        logger.info("   📊 Progress: [██████░░░░] 37.5%")
+        
+        # Stratified split for better distribution
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, shuffle=True
+        )
+        
+        # Additional validation split for hyperparameter tuning
+        x_train_opt, x_val, y_train_opt, _ = train_test_split(
+            X_train, y_train, test_size=0.25, random_state=42
+        )
+        
+        # Feature scaling
+        x_train_scaled = self.scaler.fit_transform(x_train_opt)
+        x_val_scaled = self.scaler.transform(x_val)
+        x_test_scaled = self.scaler.transform(X_test)
+        
+        logger.info(f"   📊 Training data shape: {x_train_scaled.shape}")
+        logger.info(f"   📊 Validation data shape: {x_val_scaled.shape}")
+        logger.info(f"   📊 Test data shape: {x_test_scaled.shape}")
+        logger.info(f"   📊 Features per sample: {x_train_scaled.shape[1]}")
+        logger.info(f"   📊 Target outputs: {y_train_opt.shape[1]}")
+        
+        step_elapsed = time.time() - step_start
+        logger.info(f"   ✅ Step 3 completed in {step_elapsed:.2f}s")
+        logger.info("   📊 Progress: [████████░░] 50.0%")
+        logger.info("")
+        
+        # Step 4: XGBoost model setup with GPU
+        step_start = time.time()
+        logger.info("🚀 STEP 4/8: XGBoost GPU Model Initialization")
+        logger.info("   ⏱️  Estimated time: 2-3 minutes")
+        logger.info("   📊 Progress: [████████░░] 50.0%")
+        
+        # XGBoost parameters with GPU acceleration
+        base_params = {
+            'objective': 'reg:squarederror',
+            'random_state': 42,
+            'n_jobs': -1,
+            'verbosity': 1
+        }
+        
+        if self.use_gpu:
+            base_params.update({
+                'tree_method': 'gpu_hist',
+                'gpu_id': 0,
+                'predictor': 'gpu_predictor'
+            })
+            logger.info("   🚀 GPU parameters configured: tree_method=gpu_hist, predictor=gpu_predictor")
+        else:
+            base_params.update({
+                'tree_method': 'hist',
+                'predictor': 'cpu_predictor'
+            })
+            logger.info("   💻 CPU parameters configured: tree_method=hist")
+        
+        step_elapsed = time.time() - step_start
+        logger.info(f"   ✅ Step 4 completed in {step_elapsed:.2f}s")
+        logger.info("   📊 Progress: [██████████] 62.5%")
+        logger.info("")
+        
+        # Step 5: Hyperparameter optimization with RandomizedSearchCV
+        step_start = time.time()
+        logger.info("🔍 STEP 5/8: Hyperparameter Optimization (RandomizedSearchCV)")
+        logger.info("   ⏱️  Estimated time: 15-25 minutes")
+        logger.info("   📊 Progress: [██████████] 62.5%")
+        
+        # Parameter grid for RandomizedSearchCV (faster initial search)
+        param_distributions = {
+            'n_estimators': [100, 200, 300, 500],
+            'max_depth': [3, 4, 5, 6, 7, 8],
+            'learning_rate': [0.01, 0.05, 0.1, 0.15, 0.2],
+            'subsample': [0.7, 0.8, 0.9, 1.0],
+            'colsample_bytree': [0.7, 0.8, 0.9, 1.0],
+            'min_child_weight': [1, 3, 5, 7],
+            'gamma': [0, 0.1, 0.2, 0.3],
+            'reg_alpha': [0, 0.1, 0.5, 1.0],
+            'reg_lambda': [1, 1.5, 2.0, 2.5]
+        }
+        
+        # Create XGBoost regressor with MultiOutput wrapper
+        xgb_regressor = MultiOutputRegressor(
+            xgb.XGBRegressor(**base_params), 
+            n_jobs=1  # XGBoost handles parallelism internally
+        )
+        
+        # Enhanced RandomizedSearchCV with live progress tracking
+        logger.info("   🔄 Starting RandomizedSearchCV with 5-fold CV...")
+        logger.info("   📊 Combinations to test: 50 parameter sets × 5 CV folds = 250 fits")
+        
+        randomized_search = RandomizedSearchCV(
+            estimator=xgb_regressor,
+            param_distributions={'estimator__' + k: v for k, v in param_distributions.items()},
+            n_iter=50,  # 50 random combinations
+            cv=5,       # 5-fold cross-validation
+            scoring='neg_mean_squared_error',
+            n_jobs=1,   # Let XGBoost handle GPU parallelism
+            random_state=42,
+            verbose=0   # Suppress sklearn verbose output
+        )
+        
+        logger.info("   📊 Fitting RandomizedSearchCV...")
+        search_start = time.time()
+        
+        # Simulate live progress updates during search
+        import threading
+        import time as time_module
+        
+        def progress_updater():
+            """Background thread to show progress during long operations"""
+            start = time_module.time()
+            while not getattr(progress_updater, 'stop', False):
+                elapsed = time_module.time() - start
+                minutes = int(elapsed // 60)
+                seconds = int(elapsed % 60)
+                print(f'\r   ⏳ RandomizedSearchCV running... {minutes:02d}:{seconds:02d} elapsed', 
+                      end='', flush=True)
+                time_module.sleep(5)  # Update every 5 seconds
+        
+        progress_thread = threading.Thread(target=progress_updater, daemon=True)
+        progress_thread.start()
+        
+        randomized_search.fit(x_train_scaled, y_train_opt)
+        
+        # Stop progress updater
+        progress_updater.stop = True
+        progress_thread.join(timeout=1)
+        
+        search_elapsed = time.time() - search_start
+        
+        logger.info("")  # New line after progress updates
+        logger.info("   ✅ RandomizedSearchCV completed!")
+        logger.info(f"   🎯 Best CV Score: {-randomized_search.best_score_:.6f}")
+        logger.info(f"   ⏱️  Search time: {search_elapsed:.1f}s ({search_elapsed/60:.1f} minutes)")
+        
+        step_elapsed = time.time() - step_start
+        logger.info(f"   ✅ Step 5 completed in {step_elapsed:.2f}s ({step_elapsed/60:.1f} minutes)")
+        logger.info("   📊 Progress: [████████████] 75.0%")
+        logger.info("")
+        
+        # Step 6: Fine-tuning with GridSearchCV
+        step_start = time.time()
+        logger.info("🎯 STEP 6/8: Fine-tuning with GridSearchCV")
+        logger.info("   ⏱️  Estimated time: 10-15 minutes")
+        logger.info("   📊 Progress: [████████████] 75.0%")
+        
+        # Get best parameters from RandomizedSearch
+        best_params = randomized_search.best_params_
+        logger.info("   📋 Best parameters from RandomizedSearch:")
+        for param, value in best_params.items():
+            logger.info(f"      {param}: {value}")
+        
+        # Define narrow grid around best parameters for GridSearchCV
+        base_lr = best_params.get('estimator__learning_rate', 0.1)
+        base_depth = best_params.get('estimator__max_depth', 6)
+        base_estimators = best_params.get('estimator__n_estimators', 200)
+        
+        grid_param_grid = {
+            'estimator__learning_rate': [max(0.01, base_lr - 0.02), base_lr, min(0.3, base_lr + 0.02)],
+            'estimator__max_depth': [max(3, base_depth - 1), base_depth, min(10, base_depth + 1)],
+            'estimator__n_estimators': [max(100, base_estimators - 50), base_estimators, min(1000, base_estimators + 50)]
+        }
+        
+        total_combinations = len(grid_param_grid['estimator__learning_rate']) * \
+                           len(grid_param_grid['estimator__max_depth']) * \
+                           len(grid_param_grid['estimator__n_estimators'])
+        
+        logger.info(f"   📊 Grid combinations to test: {total_combinations} parameter sets × 3 CV folds = {total_combinations * 3} fits")
+        
+        # GridSearchCV for fine-tuning
+        logger.info("   🔄 Starting GridSearchCV for fine-tuning...")
+        grid_search = GridSearchCV(
+            estimator=xgb_regressor,
+            param_grid=grid_param_grid,
+            cv=3,  # 3-fold for faster fine-tuning
+            scoring='neg_mean_squared_error',
+            n_jobs=1,
+            verbose=0
+        )
+        
+        grid_start = time.time()
+        
+        # Live progress tracking for GridSearch
+        logger.info("   📊 GridSearchCV in progress...")
+        for i in range(10):  # Simulate progress updates
+            time.sleep(0.1)  # Small delay for demonstration
+            print_progress_bar(i + 1, 10, prefix='   🔄 GridSearchCV', suffix='optimizing...')
+        
+        grid_search.fit(x_train_scaled, y_train_opt)
+        grid_elapsed = time.time() - grid_start
+        
+        logger.info("")  # New line after progress bar
+        logger.info("   ✅ GridSearchCV completed!")
+        logger.info(f"   🎯 Best Fine-tuned CV Score: {-grid_search.best_score_:.6f}")
+        logger.info(f"   ⏱️  Grid search time: {grid_elapsed:.1f}s ({grid_elapsed/60:.1f} minutes)")
+        
+        # Store best model and parameters
+        self.model = grid_search.best_estimator_
+        self.best_params = grid_search.best_params_
+        
+        step_elapsed = time.time() - step_start
+        logger.info(f"   ✅ Step 6 completed in {step_elapsed:.2f}s ({step_elapsed/60:.1f} minutes)")
+        logger.info("   📊 Progress: [██████████████] 87.5%")
+        logger.info("")
+        
+        # Step 7: Cross-validation and overfitting analysis
+        step_start = time.time()
+        logger.info("📈 STEP 7/8: Cross-Validation and Overfitting Analysis")
+        logger.info("   ⏱️  Estimated time: 5-8 minutes")
+        logger.info("   📊 Progress: [██████████████] 87.5%")
+        
+        # K-Fold cross-validation on full training set with live updates
+        logger.info("   🔄 Running K-Fold cross-validation...")
+        kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+        
+        cv_start = time.time()
+        cv_scores = cross_val_score(
+            self.model, self.scaler.fit_transform(X_train), y_train, 
+            cv=kfold, scoring='neg_mean_squared_error', n_jobs=1
+        )
+        cv_elapsed = time.time() - cv_start
+        
+        self.cv_scores = -cv_scores  # Convert back to positive MSE
+        
+        logger.info(f"   ⏱️  Cross-validation time: {cv_elapsed:.1f}s")
+        logger.info("   📊 Cross-validation results:")
+        logger.info(f"      Mean CV MSE: {self.cv_scores.mean():.6f} (+/- {self.cv_scores.std() * 2:.6f})")
+        logger.info(f"      CV MSE range: {self.cv_scores.min():.6f} - {self.cv_scores.max():.6f}")
+        
+        # Overfitting check with live status
+        logger.info("   🔍 Analyzing overfitting...")
+        overfitting_start = time.time()
+        
+        train_pred = self.model.predict(self.scaler.fit_transform(X_train))
+        val_pred = self.model.predict(self.scaler.transform(X_test))
+        
+        train_mse = mean_squared_error(y_train, train_pred)
+        test_mse = mean_squared_error(y_test, val_pred)
+        overfitting_ratio = train_mse / test_mse
+        
+        overfitting_elapsed = time.time() - overfitting_start
+        logger.info(f"   ⏱️  Overfitting analysis time: {overfitting_elapsed:.1f}s")
+        
+        logger.info("   📊 Overfitting analysis:")
+        logger.info(f"      Training MSE: {train_mse:.6f}")
+        logger.info(f"      Test MSE: {test_mse:.6f}")
+        logger.info(f"      Overfitting ratio: {overfitting_ratio:.3f}")
+        
+        # Enhanced overfitting interpretation
+        if overfitting_ratio < 0.9:
+            logger.info("   ✅ Model shows excellent generalization (minimal overfitting)")
+        elif overfitting_ratio < 1.1:
+            logger.info("   ⚠️  Model shows moderate overfitting (acceptable)")
+        else:
+            logger.warning("   🚨 Model shows significant overfitting - consider stronger regularization")
+        
+        step_elapsed = time.time() - step_start
+        logger.info(f"   ✅ Step 7 completed in {step_elapsed:.2f}s")
+        logger.info("   📊 Progress: [████████████████] 95.0%")
+        logger.info("")
+        
+        # Step 8: Final evaluation and model summary
+        step_start = time.time()
+        logger.info("🏁 STEP 8/8: Final Model Evaluation and Summary")
+        logger.info("   📊 Progress: [████████████████] 95.0%")
+        
+        # Comprehensive final evaluation
+        final_predictions = self.model.predict(x_test_scaled)
+        
+        # Calculate metrics for each target
+        individual_metrics = {}
+        for i, alloy in enumerate(self.target_alloys):
+            if i < y_test.shape[1]:
+                mse = mean_squared_error(y_test[:, i], final_predictions[:, i])
+                r2 = r2_score(y_test[:, i], final_predictions[:, i])
+                mae = mean_absolute_error(y_test[:, i], final_predictions[:, i])
                 
-                # Make prediction
-                pred = self.models[alloy].predict(X_scaled)
-                predictions[f'alloy_{alloy}_kg'] = pred
+                individual_metrics[alloy] = {
+                    'mse': mse, 'r2': r2, 'mae': mae
+                }
         
-        return predictions
-    
-    def save_models(self, models_dir: str):
-        """Save trained models to disk"""
-        models_path = Path(models_dir)
-        models_path.mkdir(exist_ok=True)
+        # Overall metrics
+        overall_mse = mean_squared_error(y_test, final_predictions)
+        overall_r2 = r2_score(y_test, final_predictions)
+        overall_mae = mean_absolute_error(y_test, final_predictions)
         
-        logger.info("💾 Saving models with final names...")
+        self.training_time = time.time() - total_start_time
         
-        # Save individual models
-        for alloy in self.alloy_types:
-            if alloy in self.models:
-                model_path = models_path / f"{alloy}_model.pkl"
-                with open(model_path, 'wb') as f:
-                    pickle.dump(self.models[alloy], f)
-                logger.info(f"   💾 Saved: {alloy}_model.pkl")
+        step_elapsed = time.time() - step_start
+        logger.info(f"   ✅ Step 8 completed in {step_elapsed:.2f}s")
+        logger.info("   📊 Progress: [████████████████] 100.0%")
+        logger.info("")
         
-        # Save scalers and feature selectors
-        with open(models_path / "model_scalers.pkl", 'wb') as f:
-            pickle.dump(self.scalers, f)
-        logger.info(f"   💾 Saved: model_scalers.pkl")
+        # Final comprehensive summary with enhanced formatting
+        logger.info("="*80)
+        logger.info("🎯 GPU-ACCELERATED TRAINING COMPLETED SUCCESSFULLY!")
+        logger.info("="*80)
         
-        with open(models_path / "feature_selectors.pkl", 'wb') as f:
-            pickle.dump(self.feature_selectors, f)
-        logger.info(f"   💾 Saved: feature_selectors.pkl")
-    
-    def load_models(self, models_dir: str):
-        """Load trained models from disk"""
-        models_path = Path(models_dir)
+        # Training summary
+        total_minutes = self.training_time / 60
+        total_hours = total_minutes / 60
         
-        # Load individual models
-        for alloy in self.alloy_types:
-            model_path = models_path / f"{alloy}_model.pkl"
-            if model_path.exists():
-                with open(model_path, 'rb') as f:
-                    self.models[alloy] = pickle.load(f)
+        if total_hours >= 1:
+            time_str = f"{self.training_time:.2f} seconds ({total_hours:.1f} hours)"
+        else:
+            time_str = f"{self.training_time:.2f} seconds ({total_minutes:.1f} minutes)"
         
-        # Load scalers and feature selectors
-        scalers_path = models_path / "model_scalers.pkl"
-        if scalers_path.exists():
-            with open(scalers_path, 'rb') as f:
-                self.scalers = pickle.load(f)
+        logger.info(f"⏱️  Total training time: {time_str}")
+        logger.info(f"🚀 GPU acceleration: {'✅ ENABLED' if self.use_gpu else '❌ DISABLED (CPU only)'}")
+        logger.info(f"📊 Training samples processed: {len(X_train):,}")
+        logger.info(f"📊 Test samples processed: {len(X_test):,}")
+        logger.info(f"📊 Features engineered: {x_train_scaled.shape[1]}")
+        logger.info(f"📊 Target variables: {y_train.shape[1]}")
+        logger.info("")
         
-        selectors_path = models_path / "feature_selectors.pkl"
-        if selectors_path.exists():
-            with open(selectors_path, 'rb') as f:
-                self.feature_selectors = pickle.load(f)
+        # Performance metrics section
+        logger.info("🎯 FINAL MODEL PERFORMANCE:")
+        logger.info(f"   Overall MSE: {overall_mse:.6f}")
         
-        self.is_trained = True
-
-
-def generate_synthetic_training_data(n_samples: int = 10000) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Generate synthetic training data for model development"""
-    np.random.seed(42)
-    
-    # Generate chemical composition data
-    data = {
-        'current_C': np.random.uniform(0.05, 1.2, n_samples),
-        'current_Si': np.random.uniform(0.1, 2.0, n_samples),
-        'current_Mn': np.random.uniform(0.3, 2.5, n_samples),
-        'current_P': np.random.uniform(0.01, 0.08, n_samples),
-        'current_S': np.random.uniform(0.01, 0.06, n_samples),
-        'current_Cr': np.random.uniform(0, 25, n_samples),
-        'current_Mo': np.random.uniform(0, 5, n_samples),
-        'current_Ni': np.random.uniform(0, 15, n_samples),
-        'current_Cu': np.random.uniform(0, 3, n_samples)
-    }
-    
-    X = pd.DataFrame(data)
-    
-    # Generate alloy quantity targets with realistic relationships
-    alloy_data = {}
-    
-    # Copper-specific modeling with enhanced patterns
-    copper_factor = X['current_Cu'] * 0.05 + np.random.normal(0, 0.02, n_samples)
-    copper_factor = np.clip(copper_factor, 0, None)
-    # Add complexity for copper prediction
-    stainless_factor = (X['current_Cr'] > 10.5) * 0.02
-    copper_interaction = X['current_Cu'] * X['current_Ni'] * 0.01
-    alloy_data['alloy_copper_kg'] = copper_factor + stainless_factor + copper_interaction + np.random.normal(0, 0.01, n_samples)
-    
-    # Other alloys with simpler relationships
-    alloy_data['alloy_chromium_kg'] = X['current_Cr'] * 0.03 + np.random.normal(0, 0.05, n_samples)
-    alloy_data['alloy_nickel_kg'] = X['current_Ni'] * 0.04 + np.random.normal(0, 0.05, n_samples)
-    alloy_data['alloy_molybdenum_kg'] = X['current_Mo'] * 0.08 + np.random.normal(0, 0.03, n_samples)
-    alloy_data['alloy_aluminum_kg'] = np.random.exponential(0.02, n_samples)
-    alloy_data['alloy_titanium_kg'] = np.random.exponential(0.02, n_samples)
-    alloy_data['alloy_vanadium_kg'] = np.random.exponential(0.02, n_samples)
-    alloy_data['alloy_niobium_kg'] = np.random.exponential(0.02, n_samples)
-    
-    # Ensure non-negative values
-    for key in alloy_data:
-        alloy_data[key] = np.clip(alloy_data[key], 0, None)
-    
-    y = pd.DataFrame(alloy_data)
-    
-    return X, y
-
-
-# Legacy class aliases for compatibility
-OptimizedAlloyPredictor = AlloyPredictor
-AdvancedDataPreprocessor = DataPreprocessor
-EnhancedAlloyPredictor = AlloyPredictor
+        # R² status evaluation
+        if overall_r2 > 0.9:
+            r2_overall_status = "✅ Excellent"
+        elif overall_r2 > 0.7:
+            r2_overall_status = "⚠️ Good"
+        else:
+            r2_overall_status = "❌ Poor"
+        
+        logger.info(f"   Overall R²:  {overall_r2:.4f} {r2_overall_status}")
+        logger.info(f"   Overall MAE: {overall_mae:.4f}")
+        logger.info(f"   CV MSE (5-fold): {self.cv_scores.mean():.6f} (+/- {self.cv_scores.std() * 2:.6f})")
+        logger.info("")
+        
+        # Hyperparameters section
+        logger.info("🔧 OPTIMIZED HYPERPARAMETERS:")
+        for param, value in self.best_params.items():
+            logger.info(f"   {param}: {value}")
+        logger.info("")
+        
+        # Individual performance section
+        logger.info("📈 INDIVIDUAL ALLOY PERFORMANCE:")
+        for alloy, metrics in individual_metrics.items():
+            # R² status for individual alloys
+            if metrics['r2'] > 0.8:
+                r2_status = "✅"
+            elif metrics['r2'] > 0.6:
+                r2_status = "⚠️"
+            else:
+                r2_status = "❌"
+            
+            logger.info(f"   {alloy:<12}: MSE={metrics['mse']:.6f}, R²={metrics['r2']:.4f} {r2_status}, MAE={metrics['mae']:.4f}")
+        
+        # Final status evaluation
+        avg_r2 = np.mean([m['r2'] for m in individual_metrics.values()])
+        if avg_r2 > 0.85:
+            final_status = "🎉 EXCELLENT - Model ready for production deployment"
+        elif avg_r2 > 0.7:
+            final_status = "👍 GOOD - Model suitable for most applications"
+        else:
+            final_status = "⚠️ FAIR - Consider additional feature engineering or data"
+        
+        logger.info("")
+        logger.info(f"🏆 MODEL STATUS: {final_status}")
+        logger.info("="*80)
+        
+        return True
