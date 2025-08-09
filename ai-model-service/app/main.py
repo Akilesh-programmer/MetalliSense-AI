@@ -11,11 +11,12 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, validator, Field
 from typing import Dict, List, Optional, Any
-import uvicorn
+import os
+import sys
 import logging
 from datetime import datetime
 
@@ -33,7 +34,7 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# CORS middleware
+# Add CORS middleware for integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -91,7 +92,7 @@ except Exception as e:
 
 @app.get("/")
 async def root():
-    """Root endpoint - service health check"""
+    """API root endpoint"""
     return {
         "status": "running",
         "service": "MetalliSense AI Model Service",
@@ -239,4 +240,5 @@ async def get_model_status():
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
