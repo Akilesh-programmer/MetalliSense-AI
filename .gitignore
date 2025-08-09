@@ -62,7 +62,10 @@ ai-model-service/test_service.py
 *.joblib
 *.h5
 *.model
+*.pkl
 models/trained/*.pkl
+ai-model-service/models/trained_models/*.pkl
+**/trained_models/*.pkl
 
 # OS
 .DS_Store
